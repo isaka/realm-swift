@@ -27,22 +27,22 @@ class ObjectTests: TestCase {
     // init(value:) tests are in ObjectCreationTests.swift
 
     func testRealm() {
-        let standalone = SwiftStringObject()
-        XCTAssertNil(standalone.realm)
+        let unmanaged = SwiftStringObject()
+        XCTAssertNil(unmanaged.realm)
 
         let realm = try! Realm()
-        var persisted: SwiftStringObject!
+        var managed: SwiftStringObject!
         try! realm.write {
-            persisted = realm.create(SwiftStringObject.self, value: [:])
-            XCTAssertNotNil(persisted.realm)
-            XCTAssertEqual(realm, persisted.realm!)
+            managed = realm.create(SwiftStringObject.self, value: [:])
+            XCTAssertNotNil(managed.realm)
+            XCTAssertEqual(realm, managed.realm!)
         }
-        XCTAssertNotNil(persisted.realm)
-        XCTAssertEqual(realm, persisted.realm!)
+        XCTAssertNotNil(managed.realm)
+        XCTAssertEqual(realm, managed.realm!)
 
         dispatchSyncNewThread {
             autoreleasepool {
-                XCTAssertNotEqual(try! Realm(), persisted.realm!)
+                XCTAssertNotEqual(try! Realm(), managed.realm!)
             }
         }
     }
@@ -65,6 +65,16 @@ class ObjectTests: TestCase {
         XCTAssert(schema.properties as AnyObject is [Property])
         XCTAssertEqual(schema.className, "SwiftConvenienceInitializerObject")
         XCTAssertEqual(schema.properties.map { $0.name }, ["stringCol"])
+    }
+
+    func testSharedSchemaUnmanaged() {
+        let object = SwiftObject()
+        XCTAssertEqual(object.dynamicType.sharedSchema(), SwiftObject.sharedSchema())
+    }
+
+    func testSharedSchemaManaged() {
+        let object = SwiftObject()
+        XCTAssertEqual(object.dynamicType.sharedSchema(), SwiftObject.sharedSchema())
     }
 
     func testInvalidated() {
@@ -161,8 +171,8 @@ class ObjectTests: TestCase {
 
         test(SwiftObject())
         try! Realm().write {
-            let persistedObject = try! Realm().create(SwiftObject.self, value: [:])
-            test(persistedObject)
+            let managedObject = try! Realm().create(SwiftObject.self, value: [:])
+            test(managedObject)
         }
     }
 
@@ -290,8 +300,8 @@ class ObjectTests: TestCase {
 
         setAndTestAllTypes(setter, getter: getter, object: SwiftObject())
         try! Realm().write {
-            let persistedObject = try! Realm().create(SwiftObject.self, value: [:])
-            self.setAndTestAllTypes(setter, getter: getter, object: persistedObject)
+            let managedObject = try! Realm().create(SwiftObject.self, value: [:])
+            self.setAndTestAllTypes(setter, getter: getter, object: managedObject)
         }
     }
 
@@ -311,8 +321,8 @@ class ObjectTests: TestCase {
 
         setAndTestAllTypes(setter, getter: getter, object: SwiftObject())
         try! Realm().write {
-            let persistedObject = try! Realm().create(SwiftObject.self, value: [:])
-            self.setAndTestAllTypes(setter, getter: getter, object: persistedObject)
+            let managedObject = try! Realm().create(SwiftObject.self, value: [:])
+            self.setAndTestAllTypes(setter, getter: getter, object: managedObject)
         }
     }
 

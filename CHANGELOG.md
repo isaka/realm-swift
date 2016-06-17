@@ -7,6 +7,21 @@ x.x.x Release notes (yyyy-MM-dd)
 
 ### Enhancements
 
+* None.
+
+### Bugfixes
+
+* Fix a crash when reading the shared schema from an observed Swift object.
+
+1.0.1 Release notes (2016-06-12)
+=============================================================
+
+### API breaking changes
+
+* None.
+
+### Enhancements
+
 * Significantly improve performance of opening Realm files, and slightly
   improve performance of committing write transactions.
 

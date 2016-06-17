@@ -122,7 +122,7 @@ class KVOTests: TestCase {
 
     // Actual tests follow
 
-    func testAllPropertyTypesStandalone() {
+    func testAllPropertyTypesForUnmanagedObject() {
         let obj = KVOObject()
         observeChange(obj, "boolCol", false, true) { obj.boolCol = true }
         observeChange(obj, "int8Col", 1, 10) { obj.int8Col = 10 }
@@ -272,5 +272,12 @@ class KVOTests: TestCase {
         observeChange(obs2, "arrayCol.invalidated", false, true) {
             self.realm.delete(obj2)
         }
+    }
+
+    func testReadSharedSchemaFromObservedObject() {
+        let obj = KVOObject()
+        obj.addObserver(self, forKeyPath: "boolCol", options: [.Old, .New], context: nil)
+        XCTAssertEqual(obj.dynamicType.sharedSchema(), KVOObject.sharedSchema())
+        obj.removeObserver(self, forKeyPath: "boolCol")
     }
 }
