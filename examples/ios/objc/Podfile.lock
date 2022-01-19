@@ -10,7 +10,13 @@ PODS:
 DEPENDENCIES:
   - ReactiveCocoa
 
+SPEC REPOS:
+  trunk:
+    - ReactiveCocoa
+
 SPEC CHECKSUMS:
   ReactiveCocoa: e2db045570aa97c695e7aa97c2bcab222ae51f4a
 
-COCOAPODS: 0.39.0
+PODFILE CHECKSUM: 461df963d8cea86a1f8e9dfb4a94097fb6c2730a
+
+COCOAPODS: 1.10.1

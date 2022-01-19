@@ -23,8 +23,8 @@
 
 // Data models: GroupParent contains all of the data for a TableView, with a
 // Group per section and an Entry per row in each section
-RLM_ARRAY_TYPE(Entry)
-RLM_ARRAY_TYPE(Group)
+RLM_COLLECTION_TYPE(Entry)
+RLM_COLLECTION_TYPE(Group)
 
 @interface Entry : RLMObject
 @property (nonatomic, strong) NSString *title;
@@ -33,11 +33,11 @@ RLM_ARRAY_TYPE(Group)
 
 @interface Group : RLMObject
 @property (nonatomic, strong) NSString *name;
-@property (nonatomic, strong) RLMArray<Entry> *entries;
+@property (nonatomic, strong) RLMArray<Entry *><Entry> *entries;
 @end
 
 @interface GroupParent : RLMObject
-@property (nonatomic, strong) RLMArray<Group> *groups;
+@property (nonatomic, strong) RLMArray<Group *><Group> *groups;
 @end
 
 @implementation Entry
@@ -119,7 +119,7 @@ RLM_ARRAY_TYPE(Group)
                                              }]
                             signalBlock:^(id unused) {
                                 [self modifyInBackground:^(RLMArray *groups) {
-                                    Group *group = groups[arc4random_uniform(groups.count)];
+                                    Group *group = groups[arc4random_uniform((uint32_t)groups.count)];
                                     NSString *name = [NSString stringWithFormat:@"Entry %d", (int)arc4random()];
                                     [group.entries addObject:[Entry createInDefaultRealmWithValue:@[name, NSDate.date]]];
                                 }];
@@ -199,12 +199,12 @@ RLM_ARRAY_TYPE(Group)
 
 // Get the Entry at a given index path
 - (Entry *)objectForIndexPath:(NSIndexPath *)indexPath {
-    return [self.parent.groups[indexPath.section] entries][indexPath.row];
+    return self.parent.groups[indexPath.section].entries[indexPath.row];
 }
 
 // Convert an NSIndexSet to an array of NSIndexPaths
-- (NSArray *)indexSetToIndexPathArray:(NSIndexSet *)indexes section:(NSInteger)section {
-    NSMutableArray *paths = [NSMutableArray arrayWithCapacity:indexes.count];
+- (NSArray<NSIndexPath *> *)indexSetToIndexPathArray:(NSIndexSet *)indexes section:(NSInteger)section {
+    NSMutableArray<NSIndexPath *> *paths = [NSMutableArray arrayWithCapacity:indexes.count];
     NSUInteger index = [indexes firstIndex];
     while (index != NSNotFound) {
         [paths addObject:[NSIndexPath indexPathForRow:index inSection:section]];
@@ -215,10 +215,12 @@ RLM_ARRAY_TYPE(Group)
 
 - (void)modifyInBackground:(void (^)(RLMArray *))block {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        GroupParent *parent = GroupParent.allObjects.firstObject;
-        [parent.realm beginWriteTransaction];
-        block(parent.groups);
-        [parent.realm commitWriteTransaction];
+        @autoreleasepool {
+            GroupParent *parent = GroupParent.allObjects.firstObject;
+            [parent.realm beginWriteTransaction];
+            block(parent.groups);
+            [parent.realm commitWriteTransaction];
+        }
     });
 }
 

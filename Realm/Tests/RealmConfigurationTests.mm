@@ -18,8 +18,12 @@
 
 #import "RLMTestCase.h"
 
+#import "TestUtils.h"
+
+#import "RLMApp_Private.h"
 #import "RLMRealmConfiguration_Private.hpp"
 #import "RLMTestObjects.h"
+#import "RLMUser_Private.h"
 #import "RLMUtil.hpp"
 
 @interface RealmConfigurationTests : RLMTestCase
@@ -79,13 +83,62 @@
     XCTAssertNoThrow(configuration.objectClasses = (@[CompanyObject.class, EmployeeObject.class]));
 }
 
+- (void)testCannotSetMutuallyExclusiveProperties {
+    RLMRealmConfiguration *configuration = [[RLMRealmConfiguration alloc] init];
+    XCTAssertNoThrow(configuration.readOnly = YES);
+    XCTAssertNoThrow(configuration.deleteRealmIfMigrationNeeded = NO);
+    XCTAssertThrows(configuration.deleteRealmIfMigrationNeeded = YES);
+    XCTAssertNoThrow(configuration.readOnly = NO);
+    XCTAssertNoThrow(configuration.deleteRealmIfMigrationNeeded = YES);
+    XCTAssertNoThrow(configuration.readOnly = NO);
+    XCTAssertThrows(configuration.readOnly = YES);
+}
+
+- (void)testSchemaModeTransitions {
+    RLMRealmConfiguration *configuration = [[RLMRealmConfiguration alloc] init];
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::Automatic);
+
+    configuration.readOnly = true;
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::Immutable);
+
+    configuration.readOnly = false;
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::Automatic);
+    configuration.deleteRealmIfMigrationNeeded = true;
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::ResetFile);
+
+    configuration.deleteRealmIfMigrationNeeded = false;
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::Automatic);
+
+    RLMUser *user = RLMDummyUser();
+    configuration.syncConfiguration = [user configurationWithPartitionValue:@"dummy"].syncConfiguration;
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::AdditiveDiscovered);
+    configuration.objectClasses = @[];
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::AdditiveExplicit);
+    configuration.readOnly = true;
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::ReadOnly);
+    configuration.objectClasses = nil;
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::ReadOnly);
+    configuration.readOnly = false;
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::AdditiveDiscovered);
+    configuration.readOnly = true;
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::ReadOnly);
+    configuration.objectClasses = @[];
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::ReadOnly);
+    configuration.readOnly = false;
+    XCTAssertEqual(configuration.schemaMode, realm::SchemaMode::AdditiveExplicit);
+
+    [user logOut];
+    [RLMApp resetAppCache];
+
+}
+
 #pragma mark - Default Configuration
 
 - (void)testDefaultConfiguration {
     RLMRealmConfiguration *defaultConfiguration = [RLMRealmConfiguration defaultConfiguration];
     XCTAssertEqualObjects(defaultConfiguration.fileURL, RLMDefaultRealmURL());
     XCTAssertNil(defaultConfiguration.inMemoryIdentifier);
-    XCTAssertNil(defaultConfiguration.encryptionKey);
+    XCTAssertEqual(!!defaultConfiguration.encryptionKey, self.encryptTests);
     XCTAssertFalse(defaultConfiguration.readOnly);
     XCTAssertEqual(defaultConfiguration.schemaVersion, 0U);
     XCTAssertNil(defaultConfiguration.migrationBlock);
@@ -102,7 +155,7 @@
     XCTAssertEqualObjects(RLMRealmConfiguration.defaultConfiguration.fileURL.path, @"/dev/null");
 }
 
-- (void)testDefaultConfiugrationUsesValueSemantics {
+- (void)testDefaultConfigurationUsesValueSemantics {
     RLMRealmConfiguration *config = [RLMRealmConfiguration defaultConfiguration];
     config.fileURL = [NSURL fileURLWithPath:@"/dev/null"];
     XCTAssertNotEqualObjects(config.fileURL, RLMRealmConfiguration.defaultConfiguration.fileURL);
@@ -123,12 +176,12 @@
     RLMRealmConfiguration.defaultConfiguration = config;
     @autoreleasepool { XCTAssertEqualObjects(RLMRealm.defaultRealm.configuration.fileURL, config.fileURL); }
 
-    config.inMemoryIdentifier = @"default";
+    config.inMemoryIdentifier = NSUUID.UUID.UUIDString;
     RLMRealmConfiguration.defaultConfiguration = config;
     @autoreleasepool {
         RLMRealm *realm = RLMRealm.defaultRealm;
         NSString *realmPath = @(realm.configuration.config.path.c_str());
-        XCTAssertTrue([realmPath hasSuffix:@"/default"]);
+        XCTAssertTrue([realmPath hasSuffix:config.inMemoryIdentifier]);
         XCTAssertTrue([realmPath hasPrefix:NSTemporaryDirectory()]);
     }
 

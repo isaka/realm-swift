@@ -53,6 +53,73 @@
     XCTAssertEqualObjects(asArray(hannahsParents), (@[ ]));
 }
 
+- (void)testLinkingObjectsOnUnmanagedObject {
+    PersonObject *don = [[PersonObject alloc] initWithValue:@[ @"Don", @60, @[] ]];
+
+    XCTAssertEqual(0u, don.parents.count);
+    XCTAssertNil(don.parents.firstObject);
+    XCTAssertNil(don.parents.lastObject);
+
+    for (__unused id parent in don.parents) {
+        XCTFail(@"Got an item in empty linking objects");
+    }
+
+    XCTAssertEqual(0u, [don.parents sortedResultsUsingKeyPath:@"age" ascending:YES].count);
+    XCTAssertEqual(0u, [don.parents objectsWhere:@"TRUEPREDICATE"].count);
+
+    XCTAssertNil([don.parents minOfProperty:@"age"]);
+    XCTAssertNil([don.parents maxOfProperty:@"age"]);
+    XCTAssertEqualObjects(@0, [don.parents sumOfProperty:@"age"]);
+    XCTAssertNil([don.parents averageOfProperty:@"age"]);
+
+    XCTAssertEqualObjects(@[], [don.parents valueForKey:@"age"]);
+    XCTAssertEqualObjects(@0, [don.parents valueForKeyPath:@"@count"]);
+    XCTAssertNil([don.parents valueForKeyPath:@"@min.age"]);
+    XCTAssertNil([don.parents valueForKeyPath:@"@max.age"]);
+    XCTAssertEqualObjects(@0, [don.parents valueForKeyPath:@"@sum.age"]);
+    XCTAssertNil([don.parents valueForKeyPath:@"@avg.age"]);
+
+    PersonObject *mark = [[PersonObject alloc] initWithValue:@[ @"Mark", @30, @[] ]];
+    XCTAssertEqual(NSNotFound, [don.parents indexOfObject:mark]);
+    XCTAssertEqual(NSNotFound, [don.parents indexOfObjectWhere:@"TRUEPREDICATE"]);
+
+    RLMAssertThrowsWithReason(([don.parents addNotificationBlock:^(RLMResults *, RLMCollectionChange *, NSError *) { }]),
+                              @"Linking objects notifications are only supported on managed objects.");
+}
+
+- (void)testLinkingObjectsOnFrozenObject {
+    NSArray *(^asArray)(id) = ^(id arrayLike) {
+        return [arrayLike valueForKeyPath:@"self"];
+    };
+
+    RLMRealm *realm = [self realmWithTestPath];
+    [realm beginWriteTransaction];
+    PersonObject *hannah = [PersonObject createInRealm:realm withValue:@[@"Hannah", @0]];
+    PersonObject *mark   = [PersonObject createInRealm:realm withValue:@[@"Mark",  @30, @[hannah]]];
+    [realm commitWriteTransaction];
+
+    PersonObject *frozenHannah = hannah.freeze;
+    PersonObject *frozenMark = mark.freeze;
+    XCTAssertEqualObjects(asArray(frozenHannah.parents), (@[frozenMark]));
+
+    [realm beginWriteTransaction];
+    PersonObject *diane = [PersonObject createInRealm:realm withValue:@[@"Diane", @29, @[hannah]]];
+    [realm commitWriteTransaction];
+
+    PersonObject *frozenHannah2 = hannah.freeze;
+    PersonObject *frozenMark2 = mark.freeze;
+    PersonObject *frozenDiane = diane.freeze;
+    XCTAssertEqualObjects(asArray(frozenHannah.parents), (@[frozenMark]));
+    XCTAssertEqualObjects(asArray(frozenHannah2.parents), (@[frozenMark2, frozenDiane]));
+
+    [realm beginWriteTransaction];
+    [realm deleteObject:hannah];
+    [realm commitWriteTransaction];
+
+    XCTAssertEqualObjects(asArray(frozenHannah.parents), (@[frozenMark]));
+    XCTAssertEqualObjects(asArray(frozenHannah2.parents), (@[frozenMark2, frozenDiane]));
+}
+
 - (void)testFilteredLinkingObjects {
     NSArray *(^asArray)(id) = ^(id arrayLike) {
         return [arrayLike valueForKeyPath:@"self"];
@@ -98,7 +165,7 @@
     }];
 
     [self waitForExpectationsWithTimeout:2.0 handler:nil];
-    [token stop];
+    [token invalidate];
 }
 
 - (void)testNotificationSentAfterCommit {
@@ -127,7 +194,7 @@
     }];
     [self waitForExpectationsWithTimeout:2.0 handler:nil];
 
-    [token stop];
+    [token invalidate];
 }
 
 - (void)testNotificationNotSentForUnrelatedChange {
@@ -151,7 +218,7 @@
             [self.realmWithTestPath transactionWithBlock:^{ }];
         }];
     }];
-    [token stop];
+    [token invalidate];
 }
 
 - (void)testNotificationSentOnlyForActualRefresh {
@@ -188,7 +255,7 @@
     [realm refresh];
     [self waitForExpectationsWithTimeout:2.0 handler:nil];
 
-    [token stop];
+    [token invalidate];
 }
 
 - (void)testDeletingObjectWithNotificationsRegistered {
@@ -210,7 +277,22 @@
     [realm deleteObject:mark];
     [realm commitWriteTransaction];
 
-    [token stop];
+    [token invalidate];
+}
+
+- (void)testRenamedProperties {
+    RLMRealm *realm = self.realmWithTestPath;
+    [realm beginWriteTransaction];
+    auto obj1 = [RenamedProperties1 createInRealm:realm withValue:@[@1, @"a"]];
+    auto obj2 = [RenamedProperties2 createInRealm:realm withValue:@[@2, @"b"]];
+    auto link = [LinkToRenamedProperties1 createInRealm:realm withValue:@[obj1, obj2, @[obj1, obj1]]];
+    [realm commitWriteTransaction];
+
+    XCTAssertEqualObjects(obj1.linking1.objectClassName, @"LinkToRenamedProperties1");
+    XCTAssertEqualObjects(obj1.linking2.objectClassName, @"LinkToRenamedProperties2");
+
+    XCTAssertTrue([obj1.linking1[0] isEqualToObject:link]);
+    XCTAssertTrue([obj2.linking2[0] isEqualToObject:link]);
 }
 
 @end

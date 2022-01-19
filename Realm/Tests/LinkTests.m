@@ -19,6 +19,20 @@
 #import "RLMTestCase.h"
 #import "RLMRealm_Dynamic.h"
 
+RLM_COLLECTION_TYPE(CircularArrayObject)
+@interface CircularArrayObject : RLMObject
+@property RLM_GENERIC_ARRAY(CircularArrayObject) *array;
+@end
+@implementation CircularArrayObject
+@end
+
+RLM_COLLECTION_TYPE(CircularSetObject)
+@interface CircularSetObject : RLMObject
+@property RLM_GENERIC_SET(CircularSetObject) *set;
+@end
+@implementation CircularSetObject
+@end
+
 @interface LinkTests : RLMTestCase
 @end
 
@@ -113,7 +127,7 @@
     XCTAssertThrows(dog.dogName, @"Dog object should be invalid after being deleted from the realm");
 
     // refresh owner and check
-    owner = [realm allObjects:[OwnerObject className]].firstObject;
+    owner = [OwnerObject allObjectsInRealm:realm].firstObject;
     XCTAssertNotNil(owner, @"Should have 1 owner");
     XCTAssertNil(owner.dog, @"Dog should be nullified when deleted");
     XCTAssertEqual([DogObject objectsInRealm:realm withPredicate:nil].count, 0U);
@@ -189,6 +203,46 @@
     XCTAssertNil(weakObj1);
 }
 
+- (void)testAddingCircularReferenceInArrayDoesNotLeakSourceObjects {
+    CircularArrayObject __weak *weakObj0, __weak *weakObj1;
+    @autoreleasepool {
+        CircularArrayObject *obj0 = [[CircularArrayObject alloc] initWithValue:@[@[]]];
+        CircularArrayObject *obj1 = [[CircularArrayObject alloc] initWithValue:@[@[obj0]]];
+        [obj0.array addObject:obj1];
+
+        weakObj0 = obj0;
+        weakObj1 = obj1;
+
+        RLMRealm *realm = [RLMRealm defaultRealm];
+        [realm beginWriteTransaction];
+        [realm addObject:obj0];
+        [realm commitWriteTransaction];
+    }
+
+    XCTAssertNil(weakObj0);
+    XCTAssertNil(weakObj1);
+}
+
+- (void)testAddingCircularReferenceInSetDoesNotLeakSourceObjects {
+    CircularSetObject __weak *weakObj0, __weak *weakObj1;
+    @autoreleasepool {
+        CircularSetObject *obj0 = [[CircularSetObject alloc] initWithValue:@[@[]]];
+        CircularSetObject *obj1 = [[CircularSetObject alloc] initWithValue:@[@[obj0]]];
+        [obj0.set addObject:obj1];
+
+        weakObj0 = obj0;
+        weakObj1 = obj1;
+
+        RLMRealm *realm = [RLMRealm defaultRealm];
+        [realm beginWriteTransaction];
+        [realm addObject:obj0];
+        [realm commitWriteTransaction];
+    }
+
+    XCTAssertNil(weakObj0);
+    XCTAssertNil(weakObj1);
+}
+
 - (void)testCircularLinks {
     RLMRealm *realm = [self realmWithTestPath];
 
@@ -201,6 +255,7 @@
     obj.next.data = @"b";
     [realm commitWriteTransaction];
 
+    XCTAssertEqual(1U, [CircleObject allObjectsInRealm:realm].count);
     CircleObject *obj1 = [CircleObject allObjectsInRealm:realm].firstObject;
     XCTAssertEqualObjects(obj1.data, @"b", @"data should be 'b'");
     XCTAssertEqualObjects(obj1.data, obj.next.data, @"objects should be equal");

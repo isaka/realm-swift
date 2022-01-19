@@ -38,6 +38,20 @@ This simple app shows how to use an encrypted realm.
 
 This simple app demonstrates how to define models with inverse relationships using `-linkingObjectsOfClass:forProperty:`.
 
+### Draw
+
+This is a simple drawing app designed to show off the collaborative features of the [Realm Mobile Platform](https://realm.io/news/introducing-realm-mobile-platform/).
+
+Any number of users may draw on a single shared canvas in any given moment, with contributions from other devices appearing on the canvas in real-time.
+
+#### Installation Instructions
+
+1. [Download the macOS version](https://realm.io/docs/realm-mobile-platform/get-started/) of the Realm Mobile Platform.
+2. Run a local instance of the Realm Mobile Platform.
+3. Open the Realm Object Server Dashboard in your browser by visiting 'http://localhost:9080'.
+4. Create a user account with the email 'demo@realm.io' and the password 'password'.
+5. Build the Draw app and deploy it to iOS devices on the same network as your Mac.
+
 ## iOS (Swift)
 
 In the `ios/swift/RealmExamples.xcodeproj` project, you will find the following examples:
@@ -74,18 +88,27 @@ This simple app shows how to use an encrypted realm.
 
 This simple app demonstrates how to define models with inverse relationships using `linkingObjectsOfClass(_:forProperty:)`.
 
-## iOS (RubyMotion)
+### Projections
 
-***RubyMotion support is experimental. We make no claims towards stability and/or performance when using Realm in RubyMotion.***
+This app demonstrates how to define Projection on Realm Object and how to use it in SwiftUI application.
 
-In the `ios/rubymotion` directory, you will find a Simple example demonstrating how to use Realm in a [RubyMotion](http://www.rubymotion.com) iOS app. Make sure to have run `sh build.sh ios-static` from the root of this repo before building and running this example. You can build and run this example by running `rake` from the `rubymotion/Simple` directory.
+### AppClip / AppClipParent
 
-To use Realm in your own RubyMotion iOS or OSX app, you must define your models in Objective-C and place them in the `models/` directory. Then in your `Rakefile`, define the following `vendor_project`s:
+These two targets demonstrate how to use Realm to persist data between an App Clip and its parent.
 
-```ruby
-app.vendor_project 'path/to/Realm/Realm.framework', :static, :products => ['Realm'], :force_load => false
-app.vendor_project 'models', :static, :cflags => '-F /path/to/Realm/'
-```
+**Note:** This is only supported for non-synchronized realms.
+
+#### Example Usage
+
+For the purpose of this example, the app clip invocation and parent application download is simulated by running each target.
+
+For more information on complete App Clip flow see: [Responding to invocations](https://developer.apple.com/documentation/app_clips/responding_to_invocations) and [Launch Experience](https://developer.apple.com/documentation/app_clips/testing_your_app_clip_s_launch_experience).
+
+![alt text](https://github.com/realm/realm-swift/blob/em/appclip_ex/examples/ios/swift/AppClip/appclip_ex.gif?raw=true)
+
+**Note:** When testing App Group Entitlements on MacOS (including the iOS simulator), `containerURL(forSecurityApplicationGroupIdentifier:)` will always return the shared directory URL, even when the group identifier is invalid.  Be sure to test on physical devices with non-simulated iOS for expected security behavior. See [Return Value](https://developer.apple.com/documentation/foundation/filemanager/1412643-containerurl).
+
+
 
 ## OSX (Objective-C)
 

@@ -27,31 +27,31 @@ class RepositoriesViewController: UICollectionViewController, UITextFieldDelegat
     var token: NotificationToken?
 
     deinit {
-        token?.stop()
+        token?.invalidate()
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
         let realm = try! Realm()
-        token = realm.addNotificationBlock { [weak self] notification, realm in
+        token = realm.observe { [weak self] _, _ in
             self?.reloadData()
         }
 
-        let components = NSURLComponents(string: "https://api.github.com/search/repositories")!
+        var components = URLComponents(string: "https://api.github.com/search/repositories")!
         components.queryItems = [
-            NSURLQueryItem(name: "q", value: "language:objc"),
-            NSURLQueryItem(name: "sort", value: "stars"),
-            NSURLQueryItem(name: "order", value: "desc")
+            URLQueryItem(name: "q", value: "language:objc"),
+            URLQueryItem(name: "sort", value: "stars"),
+            URLQueryItem(name: "order", value: "desc")
         ]
-        NSURLSession.sharedSession().dataTaskWithRequest(NSURLRequest(URL: components.URL!)) { (data, response, error) -> Void in
+        URLSession.shared.dataTask(with: URLRequest(url: components.url!)) { data, _, error in
             if let error = error {
-                NSLog("%@", error.localizedDescription)
+                print(error)
                 return
             }
 
             do {
-                let repositories = try NSJSONSerialization.JSONObjectWithData(data!, options: []) as! [String: AnyObject]
+                let repositories = try JSONSerialization.jsonObject(with: data!, options: []) as! [String: AnyObject]
                 let items = repositories["items"] as! [[String: AnyObject]]
 
                 let realm = try Realm()
@@ -60,36 +60,33 @@ class RepositoriesViewController: UICollectionViewController, UITextFieldDelegat
                         let repository = Repository()
                         repository.identifier = String(item["id"] as! Int)
                         repository.name = item["name"] as? String
-                        repository.avatarURL = item["owner"]!["avatar_url"] as? String;
+                        repository.avatarURL = item["owner"]!["avatar_url"] as? String
 
-                        realm.add(repository, update: true)
+                        realm.add(repository, update: .modified)
                     }
                 }
-
-            } catch (let error as NSError) {
-                NSLog("%@", error.localizedDescription)
+            } catch {
+                print(error.localizedDescription)
             }
         }.resume()
     }
 
-    override func collectionView(collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+    override func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
         return results?.count ?? 0
     }
 
-    override func collectionView(collectionView: UICollectionView, cellForItemAtIndexPath indexPath: NSIndexPath) -> UICollectionViewCell {
-        let cell = collectionView.dequeueReusableCellWithReuseIdentifier("Cell", forIndexPath: indexPath) as! RepositoryCell
-
-        let repository = results![indexPath.item];
-
+    override func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "Cell", for: indexPath) as! RepositoryCell
+        let repository = results![indexPath.item]
         cell.titleLabel.text = repository.name
 
-        NSURLSession.sharedSession().dataTaskWithRequest(NSURLRequest(URL: NSURL(string: repository.avatarURL!)!)) { (data, response, error) -> Void in
+        URLSession.shared.dataTask(with: URLRequest(url: URL(string: repository.avatarURL!)!)) { (data, _, error) -> Void in
             if let error = error {
-                NSLog("%@", error.localizedDescription)
+                print(error.localizedDescription)
                 return
             }
 
-            dispatch_async(dispatch_get_main_queue()) {
+            DispatchQueue.main.async {
                 let image = UIImage(data: data!)!
                 cell.avatarImageView!.image = image
             }
@@ -101,10 +98,10 @@ class RepositoriesViewController: UICollectionViewController, UITextFieldDelegat
     func reloadData() {
         let realm = try! Realm()
         results = realm.objects(Repository.self)
-        if let text = searchField.text where !text.isEmpty {
+        if let text = searchField.text, !text.isEmpty {
             results = results?.filter("name contains[c] %@", text)
         }
-        results = results?.sorted("name", ascending: sortOrderControl!.selectedSegmentIndex == 0)
+        results = results?.sorted(byKeyPath: "name", ascending: sortOrderControl!.selectedSegmentIndex == 0)
 
         collectionView?.reloadData()
     }
@@ -118,8 +115,7 @@ class RepositoriesViewController: UICollectionViewController, UITextFieldDelegat
         reloadData()
     }
 
-    func textFieldDidEndEditing(textField: UITextField) {
+    func textFieldDidEndEditing(_ textField: UITextField) {
         reloadData()
     }
 }
-

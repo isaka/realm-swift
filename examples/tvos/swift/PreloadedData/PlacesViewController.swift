@@ -27,44 +27,42 @@ class PlacesViewController: UITableViewController, UITextFieldDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        let seedFileURL = NSBundle.mainBundle().URLForResource("Places", withExtension: "realm")
+        let seedFileURL = Bundle.main.url(forResource: "Places", withExtension: "realm")
         let config = Realm.Configuration(fileURL: seedFileURL, readOnly: true)
         Realm.Configuration.defaultConfiguration = config
 
         reloadData()
     }
 
-    override func tableView(tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         return results?.count ?? 0
     }
 
-    override func tableView(tableView: UITableView, cellForRowAtIndexPath indexPath: NSIndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCellWithIdentifier("Cell", forIndexPath: indexPath)
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath)
 
         let place = results![indexPath.row]
 
         cell.textLabel!.text = place.postalCode
+        cell.detailTextLabel!.text = "\(place.placeName!), \(place.state!)"
         if let county = place.county {
-            cell.detailTextLabel!.text = String(format: "%@, %@, %@", place.placeName!, place.state!, county)
-        } else {
-            cell.detailTextLabel!.text = String(format: "%@, %@", place.placeName!, place.state!)
+            cell.detailTextLabel!.text = cell.detailTextLabel!.text! + ", \(county)"
         }
-
         return cell
     }
 
     func reloadData() {
         let realm = try! Realm()
         results = realm.objects(Place.self)
-        if let text = searchField.text where !text.isEmpty {
+        if let text = searchField.text, !text.isEmpty {
             results = results?.filter("postalCode beginswith %@", text)
         }
-        results = results?.sorted("postalCode")
+        results = results?.sorted(byKeyPath: "postalCode")
 
         tableView?.reloadData()
     }
-    
-    func textFieldDidEndEditing(textField: UITextField) {
+
+    func textFieldDidEndEditing(_ textField: UITextField) {
         reloadData()
     }
 }
