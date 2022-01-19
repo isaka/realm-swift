@@ -28,32 +28,39 @@
 #import "RLMRealm_Private.hpp"
 #import "RLMSchema_Private.h"
 #import "RLMUtil.hpp"
+#import "RLMRealmUtil.hpp"
 
-#import "object_store.hpp"
-#import "shared_realm.hpp"
-
+#import <realm/object-store/object_store.hpp>
+#import <realm/object-store/shared_realm.hpp>
+#import <realm/table.hpp>
 #import <realm/version.hpp>
+
 #import <objc/runtime.h>
 
 using namespace realm;
 
 static void RLMAssertRealmSchemaMatchesTable(id self, RLMRealm *realm) {
     for (RLMObjectSchema *objectSchema in realm.schema.objectSchema) {
-        Table *table = objectSchema.table;
+        auto& info = realm->_info[objectSchema.className];
+        TableRef table = ObjectStore::table_for_object_type(realm.group, objectSchema.objectStoreName);
         for (RLMProperty *property in objectSchema.properties) {
-            XCTAssertEqual(property.column, table->get_column_index(RLMStringDataWithNSString(property.name)));
-            XCTAssertEqual(property.indexed || property.isPrimary, table->has_search_index(property.column));
+            auto column = info.tableColumn(property);
+            XCTAssertEqual(column, table->get_column_key(RLMStringDataWithNSString(property.columnName)));
+            if (property.isPrimary)
+                XCTAssertTrue(property.indexed);
+            XCTAssertEqual(property.indexed, table->has_search_index(column));
         }
     }
+    static_cast<void>(self);
 }
 
-@interface MigrationObject : RLMObject
+@interface MigrationTestObject : RLMObject
 @property int intCol;
 @property NSString *stringCol;
 @end
-RLM_ARRAY_TYPE(MigrationObject);
+RLM_COLLECTION_TYPE(MigrationTestObject);
 
-@implementation MigrationObject
+@implementation MigrationTestObject
 @end
 
 @interface MigrationPrimaryKeyObject : RLMObject
@@ -76,13 +83,13 @@ RLM_ARRAY_TYPE(MigrationObject);
 }
 @end
 
-@interface ThreeFieldMigrationObject : RLMObject
+@interface ThreeFieldMigrationTestObject : RLMObject
 @property int col1;
 @property int col2;
 @property int col3;
 @end
 
-@implementation ThreeFieldMigrationObject
+@implementation ThreeFieldMigrationTestObject
 @end
 
 @interface MigrationTwoStringObject : RLMObject
@@ -94,8 +101,10 @@ RLM_ARRAY_TYPE(MigrationObject);
 @end
 
 @interface MigrationLinkObject : RLMObject
-@property MigrationObject *object;
-@property RLMArray<MigrationObject> *array;
+@property MigrationTestObject *object;
+@property RLMArray<MigrationTestObject> *array;
+@property RLMSet<MigrationTestObject> *set;
+@property RLMDictionary<NSString *, MigrationTestObject *><RLMString, MigrationTestObject> *dictionary;
 @end
 
 @implementation MigrationLinkObject
@@ -141,6 +150,7 @@ RLM_ARRAY_TYPE(MigrationObject);
 - (RLMRealmConfiguration *)config {
     RLMRealmConfiguration *config = [RLMRealmConfiguration new];
     config.fileURL = RLMTestRealmURL();
+    config.encryptionKey = RLMRealmConfiguration.rawDefaultConfiguration.encryptionKey;
     return config;
 }
 
@@ -154,8 +164,7 @@ RLM_ARRAY_TYPE(MigrationObject);
 
 - (void)createTestRealmWithSchema:(NSArray *)objectSchema block:(void (^)(RLMRealm *realm))block {
     @autoreleasepool {
-        RLMRealmConfiguration *config = [RLMRealmConfiguration new];
-        config.fileURL = RLMTestRealmURL();
+        RLMRealmConfiguration *config = self.config;
         config.customSchema = [self schemaWithObjects:objectSchema];
 
         RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
@@ -167,11 +176,10 @@ RLM_ARRAY_TYPE(MigrationObject);
 
 - (RLMRealm *)migrateTestRealmWithBlock:(RLMMigrationBlock)block NS_RETURNS_RETAINED {
     @autoreleasepool {
-        RLMRealmConfiguration *config = [RLMRealmConfiguration new];
-        config.fileURL = RLMTestRealmURL();
+        RLMRealmConfiguration *config = self.config;
         config.schemaVersion = 1;
         config.migrationBlock = block;
-        XCTAssertNil([RLMRealm migrateRealm:config]);
+        XCTAssertTrue([RLMRealm performMigrationForConfiguration:config error:nil]);
 
         RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
         RLMAssertRealmSchemaMatchesTable(self, realm);
@@ -181,11 +189,10 @@ RLM_ARRAY_TYPE(MigrationObject);
 
 - (void)failToMigrateTestRealmWithBlock:(RLMMigrationBlock)block {
     @autoreleasepool {
-        RLMRealmConfiguration *config = [RLMRealmConfiguration new];
-        config.fileURL = RLMTestRealmURL();
+        RLMRealmConfiguration *config = self.config;
         config.schemaVersion = 1;
         config.migrationBlock = block;
-        XCTAssertNotNil([RLMRealm migrateRealm:config]);
+        XCTAssertFalse([RLMRealm performMigrationForConfiguration:config error:nil]);
     }
 }
 
@@ -213,7 +220,7 @@ RLM_ARRAY_TYPE(MigrationObject);
 }
 
 - (void)assertNoMigrationRequiredForChangeFrom:(NSArray *)from to:(NSArray *)to {
-    RLMRealmConfiguration *config = [RLMRealmConfiguration new];
+    RLMRealmConfiguration *config = self.config;
     config.customSchema = [self schemaWithObjects:from];
     @autoreleasepool { [RLMRealm realmWithConfiguration:config error:nil]; }
 
@@ -227,8 +234,7 @@ RLM_ARRAY_TYPE(MigrationObject);
 }
 
 - (RLMRealmConfiguration *)renameConfigurationWithObjectSchemas:(NSArray *)objectSchemas migrationBlock:(RLMMigrationBlock)block {
-    RLMRealmConfiguration *configuration = [RLMRealmConfiguration new];
-    configuration.fileURL = RLMTestRealmURL();
+    RLMRealmConfiguration *configuration = self.config;
     configuration.schemaVersion = 1;
     configuration.customSchema = [self schemaWithObjects:objectSchemas];
     configuration.migrationBlock = block;
@@ -252,7 +258,10 @@ RLM_ARRAY_TYPE(MigrationObject);
                         className:(NSString *)className oldName:(NSString *)oldName newName:(NSString *)newName {
     RLMRealmConfiguration *config = [self renameConfigurationWithObjectSchemas:objectSchemas className:className
                                                                        oldName:oldName newName:newName];
-    XCTAssertTrue([[[RLMRealm migrateRealm:config] localizedDescription] rangeOfString:errorMessage].location != NSNotFound);
+    NSError *error;
+    [RLMRealm performMigrationForConfiguration:config error:&error];
+    XCTAssertTrue([error.localizedDescription rangeOfString:errorMessage].location != NSNotFound,
+                  @"\"%@\" should contain \"%@\"", error.localizedDescription, errorMessage);
 }
 
 - (void)assertPropertyRenameError:(NSString *)errorMessage
@@ -262,7 +271,9 @@ RLM_ARRAY_TYPE(MigrationObject);
     RLMProperty *afterProperty = schema.properties.firstObject;
     RLMProperty *beforeProperty = [afterProperty copyWithNewName:@"before_stringCol"];
     schema.properties = @[beforeProperty];
-    if (transform1) { transform1(schema, beforeProperty, afterProperty); }
+    if (transform1) {
+        transform1(schema, beforeProperty, afterProperty);
+    }
 
     [self createTestRealmWithSchema:@[schema] block:^(RLMRealm *realm) {
         if (errorMessage == nil) {
@@ -271,15 +282,21 @@ RLM_ARRAY_TYPE(MigrationObject);
     }];
 
     schema.properties = @[afterProperty];
-    if (transform2) { transform2(schema, beforeProperty, afterProperty); }
+    if (transform2) {
+        transform2(schema, beforeProperty, afterProperty);
+    }
 
-    RLMRealmConfiguration *config = [self renameConfigurationWithObjectSchemas:@[schema] className:StringObject.className
-                                                                       oldName:beforeProperty.name newName:afterProperty.name];
+    auto config = [self renameConfigurationWithObjectSchemas:@[schema]
+                                                   className:StringObject.className
+                                                     oldName:beforeProperty.name
+                                                     newName:afterProperty.name];
 
     if (errorMessage) {
-        XCTAssertEqualObjects([[RLMRealm migrateRealm:config] localizedDescription], errorMessage);
+        NSError *error;
+        [RLMRealm performMigrationForConfiguration:config error:&error];
+        XCTAssertEqualObjects([error localizedDescription], errorMessage);
     } else {
-        XCTAssertNil([RLMRealm migrateRealm:config]);
+        XCTAssertTrue([RLMRealm performMigrationForConfiguration:config error:nil]);
         XCTAssertEqualObjects(@"0", [[[StringObject allObjectsInRealm:[RLMRealm realmWithConfiguration:config error:nil]] firstObject] stringCol]);
     }
 }
@@ -293,6 +310,7 @@ RLM_ARRAY_TYPE(MigrationObject);
     RLMValidateRealmError(error, RLMErrorFail, @"Cannot open an uninitialized realm in read-only mode", nil);
 
     RLMRealmConfiguration *config = [RLMRealmConfiguration defaultConfiguration];
+    config.encryptionKey = nil;
     @autoreleasepool { [RLMRealm realmWithConfiguration:config error:nil]; }
     XCTAssertEqual(0U, [RLMRealm schemaVersionAtURL:config.fileURL encryptionKey:nil error:nil]);
 
@@ -309,7 +327,7 @@ RLM_ARRAY_TYPE(MigrationObject);
     RLMRealmConfiguration *config = [RLMRealmConfiguration defaultConfiguration];
     config.schemaVersion = 10;
     @autoreleasepool { [RLMRealm realmWithConfiguration:config error:nil]; }
-    XCTAssertEqual(10U, [RLMRealm schemaVersionAtURL:config.fileURL encryptionKey:nil error:nil]);
+    XCTAssertEqual(10U, [RLMRealm schemaVersionAtURL:config.fileURL encryptionKey:config.encryptionKey error:nil]);
 
     config.schemaVersion = 5;
     RLMAssertThrowsWithReasonMatching([RLMRealm realmWithConfiguration:config error:nil],
@@ -320,35 +338,35 @@ RLM_ARRAY_TYPE(MigrationObject);
     RLMRealmConfiguration *config = [RLMRealmConfiguration defaultConfiguration];
     config.schemaVersion = 10;
     @autoreleasepool { [RLMRealm realmWithConfiguration:config error:nil]; }
-    XCTAssertEqual(10U, [RLMRealm schemaVersionAtURL:config.fileURL encryptionKey:nil error:nil]);
+    XCTAssertEqual(10U, [RLMRealm schemaVersionAtURL:config.fileURL encryptionKey:config.encryptionKey error:nil]);
 
     RLMRealmConfiguration *config2 = [RLMRealmConfiguration defaultConfiguration];
     config2.schemaVersion = 5;
     config2.fileURL = RLMTestRealmURL();
     @autoreleasepool { [RLMRealm realmWithConfiguration:config2 error:nil]; }
-    XCTAssertEqual(5U, [RLMRealm schemaVersionAtURL:config2.fileURL encryptionKey:nil error:nil]);
+    XCTAssertEqual(5U, [RLMRealm schemaVersionAtURL:config2.fileURL encryptionKey:config.encryptionKey error:nil]);
 
     // Should not have been changed
-    XCTAssertEqual(10U, [RLMRealm schemaVersionAtURL:config.fileURL encryptionKey:nil error:nil]);
+    XCTAssertEqual(10U, [RLMRealm schemaVersionAtURL:config.fileURL encryptionKey:config.encryptionKey error:nil]);
 }
 
 #pragma mark - Migration Requirements
 
 - (void)testAddingClassDoesNotRequireMigration {
-    RLMRealmConfiguration *config = [RLMRealmConfiguration new];
-    config.objectClasses = @[MigrationObject.class];
+    RLMRealmConfiguration *config = self.config;
+    config.objectClasses = @[MigrationTestObject.class];
     @autoreleasepool { [RLMRealm realmWithConfiguration:config error:nil]; }
 
-    config.objectClasses = @[MigrationObject.class, ThreeFieldMigrationObject.class];
+    config.objectClasses = @[MigrationTestObject.class, ThreeFieldMigrationTestObject.class];
     XCTAssertNoThrow([RLMRealm realmWithConfiguration:config error:nil]);
 }
 
 - (void)testRemovingClassDoesNotRequireMigration {
-    RLMRealmConfiguration *config = [RLMRealmConfiguration new];
-    config.objectClasses = @[MigrationObject.class, ThreeFieldMigrationObject.class];
+    RLMRealmConfiguration *config = self.config;
+    config.objectClasses = @[MigrationTestObject.class, ThreeFieldMigrationTestObject.class];
     @autoreleasepool { [RLMRealm realmWithConfiguration:config error:nil]; }
 
-    config.objectClasses = @[MigrationObject.class];
+    config.objectClasses = @[MigrationTestObject.class];
     XCTAssertNoThrow([RLMRealm realmWithConfiguration:config error:nil]);
 }
 
@@ -444,7 +462,7 @@ RLM_ARRAY_TYPE(MigrationObject);
 }
 
 - (void)testChangingLinkTargetRequiresMigration {
-    NSArray *linkTargets = @[[RLMObjectSchema schemaForObjectClass:MigrationObject.class],
+    NSArray *linkTargets = @[[RLMObjectSchema schemaForObjectClass:MigrationTestObject.class],
                              [RLMObjectSchema schemaForObjectClass:MigrationTwoStringObject.class]];
     RLMObjectSchema *from = [RLMObjectSchema schemaForObjectClass:MigrationLinkObject.class];
 
@@ -456,7 +474,7 @@ RLM_ARRAY_TYPE(MigrationObject);
 }
 
 - (void)testChangingLinkListTargetRequiresMigration {
-    NSArray *linkTargets = @[[RLMObjectSchema schemaForObjectClass:MigrationObject.class],
+    NSArray *linkTargets = @[[RLMObjectSchema schemaForObjectClass:MigrationTestObject.class],
                              [RLMObjectSchema schemaForObjectClass:MigrationTwoStringObject.class]];
     RLMObjectSchema *from = [RLMObjectSchema schemaForObjectClass:MigrationLinkObject.class];
 
@@ -468,27 +486,15 @@ RLM_ARRAY_TYPE(MigrationObject);
 }
 
 - (void)testChangingPropertyTypesRequiresMigration {
-    RLMObjectSchema *from = [RLMObjectSchema schemaForObjectClass:MigrationObject.class];
+    RLMObjectSchema *from = [RLMObjectSchema schemaForObjectClass:MigrationTestObject.class];
 
-    RLMObjectSchema *to = [RLMObjectSchema schemaForObjectClass:MigrationObject.class];
+    RLMObjectSchema *to = [RLMObjectSchema schemaForObjectClass:MigrationTestObject.class];
+    to.objectClass = RLMObject.class;
     RLMProperty *prop = to.properties[0];
     RLMProperty *strProp = to.properties[1];
     prop.type = strProp.type;
-    prop.objcRawType = strProp.objcRawType;
-    prop.objcType = strProp.objcType;
 
     [self assertMigrationRequiredForChangeFrom:@[from] to:@[to]];
-}
-
-- (void)testChangingIntSizeDoesNotRequireMigration {
-    RLMObjectSchema *from = [RLMObjectSchema schemaForObjectClass:MigrationObject.class];
-
-    RLMObjectSchema *to = [RLMObjectSchema schemaForObjectClass:MigrationObject.class];
-    RLMProperty *prop = to.properties[0];
-    prop.objcRawType = @"q"; // 'long long' rather than 'int'
-    prop.objcType = 'q';
-
-    [self assertNoMigrationRequiredForChangeFrom:@[from] to:@[to]];
 }
 
 - (void)testDeleteRealmIfMigrationNeededWithSetCustomSchema {
@@ -497,7 +503,7 @@ RLM_ARRAY_TYPE(MigrationObject);
 
     RLMObjectSchema *to = [RLMObjectSchema schemaForObjectClass:MigrationTwoStringObject.class];
 
-    RLMRealmConfiguration *config = [RLMRealmConfiguration new];
+    RLMRealmConfiguration *config = self.config;
     config.customSchema = [self schemaWithObjects:@[from]];
     @autoreleasepool { [RLMRealm realmWithConfiguration:config error:nil]; }
 
@@ -515,21 +521,21 @@ RLM_ARRAY_TYPE(MigrationObject);
 - (void)testDeleteRealmIfMigrationNeeded {
     for (uint64_t targetSchemaVersion = 1; targetSchemaVersion < 2; targetSchemaVersion++) {
         RLMRealmConfiguration *configuration = [RLMRealmConfiguration defaultConfiguration];
-        RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationObject.class];
+        RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationTestObject.class];
         configuration.customSchema = [self schemaWithObjects:@[objectSchema]];
 
         @autoreleasepool {
             [[NSFileManager defaultManager] removeItemAtURL:configuration.fileURL error:nil];
             RLMRealm *realm = [RLMRealm realmWithConfiguration:configuration error:nil];
             [realm transactionWithBlock:^{
-                [realm addObject:[MigrationObject new]];
+                [realm addObject:[MigrationTestObject new]];
             }];
         }
 
         // Change string to int, requiring a migration
+        objectSchema.objectClass = RLMObject.class;
         RLMProperty *stringCol = objectSchema.properties[1];
         stringCol.type = RLMPropertyTypeInt;
-        stringCol.objcType = 'i';
         stringCol.optional = NO;
         objectSchema.properties = @[stringCol];
 
@@ -566,8 +572,8 @@ RLM_ARRAY_TYPE(MigrationObject);
     RLMRealmConfiguration *config = [self config];
     config.readOnly = true;
     RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
-    objectSchema = realm.schema[@"StringObject"];
-    XCTAssertTrue(objectSchema.table->has_search_index([objectSchema.properties[0] column]));
+    auto& info = realm->_info[@"StringObject"];
+    XCTAssertTrue(info.table()->has_search_index(info.tableColumn(objectSchema.properties[0].name)));
 }
 
 - (void)testRearrangeProperties {
@@ -583,15 +589,17 @@ RLM_ARRAY_TYPE(MigrationObject);
 
     RLMRealm *realm = [self realmWithTestPathAndSchema:schema];
     [realm beginWriteTransaction];
-    [realm createObject:CircleObject.className withValue:@[@"data", NSNull.null]];
 
-    // -createObject:withValue: takes values in the order the properties were declared.
-    RLMAssertThrowsWithReasonMatching(([realm createObject:CircleObject.className withValue:@[NSNull.null, @"data"]]), @"object of type 'CircleObject'");
+    // -createObject:withValue: takes values in the order the properties appear in the array
+    [realm createObject:CircleObject.className withValue:@[NSNull.null, @"data"]];
+    RLMAssertThrowsWithReasonMatching(([realm createObject:CircleObject.className withValue:@[@"data", NSNull.null]]),
+                                      @"Invalid value 'data' to initialize object of type 'CircleObject'");
     [realm commitWriteTransaction];
 
     // accessors should work
     CircleObject *obj = [[CircleObject allObjectsInRealm:realm] firstObject];
     XCTAssertEqualObjects(@"data", obj.data);
+    XCTAssertNil(obj.next);
     [realm beginWriteTransaction];
     XCTAssertNoThrow(obj.data = @"new data");
     XCTAssertNoThrow(obj.next = obj);
@@ -601,71 +609,22 @@ RLM_ARRAY_TYPE(MigrationObject);
     CircleObject *defaultObj = [[CircleObject allObjects] firstObject];
     XCTAssertEqualObjects(defaultObj.data, @"data");
 
-    // test object from other realm still works
-    XCTAssertEqualObjects(obj.data, @"new data");
-
     RLMAssertRealmSchemaMatchesTable(self, realm);
 
-    // verify schema for both objects
-    NSArray *properties = defaultObj.objectSchema.properties;
-    for (NSUInteger i = 0; i < properties.count; i++) {
-        XCTAssertEqual([properties[i] column], i);
-    }
-    properties = obj.objectSchema.properties;
-    for (NSUInteger i = 0; i < properties.count; i++) {
-        XCTAssertEqual([properties[i] column], i);
-    }
+    // re-check that things still work for the realm with the swapped order
+    XCTAssertEqualObjects(obj.data, @"new data");
 
     [realm beginWriteTransaction];
-    [realm createObject:CircleObject.className withValue:@[@"data", NSNull.null]];
-
-    // -createObject:withValue: takes values in the order the properties were declared.
-    RLMAssertThrowsWithReasonMatching(([realm createObject:CircleObject.className withValue:@[NSNull.null, @"data"]]), @"object of type 'CircleObject'");
+    [realm createObject:CircleObject.className withValue:@[NSNull.null, @"data"]];
+    RLMAssertThrowsWithReasonMatching(([realm createObject:CircleObject.className withValue:@[@"data", NSNull.null]]),
+                                      @"Invalid value 'data' to initialize object of type 'CircleObject'");
     [realm commitWriteTransaction];
-}
-
-- (void)testAccessorCreationForReadOnlyRealms {
-    RLMClearAccessorCache();
-
-    // Create a realm file with only a single table
-    [self createTestRealmWithSchema:@[[RLMObjectSchema schemaForObjectClass:IntObject.class]] block:^(RLMRealm *realm) {
-        [realm createObject:IntObject.className withValue:@[@1]];
-    }];
-
-    Class intObjectAccessorClass;
-    @autoreleasepool {
-        RLMRealm *realm = [self readOnlyRealmWithURL:RLMTestRealmURL() error:nil];
-
-        intObjectAccessorClass = realm.schema[IntObject.className].accessorClass;
-
-        // StringObject table doesn't exist, so it should not have an accessor
-        // class despite being in the object schema
-        RLMObjectSchema *missingTableSchema = realm.schema[StringObject.className];
-        XCTAssertNotNil(missingTableSchema);
-        XCTAssertEqual(missingTableSchema.accessorClass, RLMDynamicObject.class);
-    }
-
-    @autoreleasepool {
-        RLMRealm *realm = [self realmWithTestPath];
-
-        // read-write realm should have a different IntObject accessor class due
-        // to that we check for RLMSchema compatibility and not for each RLMObjectSchema
-        XCTAssertNotEqual(intObjectAccessorClass, realm.schema[IntObject.className].accessorClass);
-
-        // StringObject should now have an accessor class
-        RLMObjectSchema *missingTableSchema = realm.schema[StringObject.className];
-        XCTAssertNotNil(missingTableSchema);
-        XCTAssertNotNil(missingTableSchema.accessorClass);
-        XCTAssertNotEqual(missingTableSchema.accessorClass, RLMObject.class);
-    }
-
-    RLMClearAccessorCache();
 }
 
 #pragma mark - Migration block invocatios
 
 - (void)testMigrationBlockNotCalledForIntialRealmCreation {
-    RLMRealmConfiguration *config = [RLMRealmConfiguration new];
+    RLMRealmConfiguration *config = self.config;
     config.migrationBlock = ^(__unused RLMMigration *migration, __unused uint64_t oldSchemaVersion) {
         XCTFail(@"Migration block should not have been called");
     };
@@ -673,7 +632,7 @@ RLM_ARRAY_TYPE(MigrationObject);
 }
 
 - (void)testMigrationBlockNotCalledWhenSchemaVersionIsUnchanged {
-    RLMRealmConfiguration *config = [RLMRealmConfiguration new];
+    RLMRealmConfiguration *config = self.config;
     config.schemaVersion = 1;
     @autoreleasepool { XCTAssertNoThrow([RLMRealm realmWithConfiguration:config error:nil]); }
 
@@ -681,11 +640,11 @@ RLM_ARRAY_TYPE(MigrationObject);
         XCTFail(@"Migration block should not have been called");
     };
     @autoreleasepool { XCTAssertNoThrow([RLMRealm realmWithConfiguration:config error:nil]); }
-    @autoreleasepool { XCTAssertNil([RLMRealm migrateRealm:config]); }
+    @autoreleasepool { XCTAssertTrue([RLMRealm performMigrationForConfiguration:config error:nil]); }
 }
 
 - (void)testMigrationBlockCalledWhenSchemaVersionHasChanged {
-    RLMRealmConfiguration *config = [RLMRealmConfiguration new];
+    RLMRealmConfiguration *config = self.config;
     config.schemaVersion = 1;
     @autoreleasepool { XCTAssertNoThrow([RLMRealm realmWithConfiguration:config error:nil]); }
 
@@ -699,16 +658,50 @@ RLM_ARRAY_TYPE(MigrationObject);
 
     migrationCalled = false;
     config.schemaVersion = 3;
-    @autoreleasepool { XCTAssertNil([RLMRealm migrateRealm:config]); }
+    @autoreleasepool { XCTAssertTrue([RLMRealm performMigrationForConfiguration:config error:nil]); }
     XCTAssertTrue(migrationCalled);
+}
+
+#pragma mark - Async Migration
+
+- (void)testAsyncMigration {
+    RLMRealmConfiguration *c = self.config;
+    c.schemaVersion = 1;
+    @autoreleasepool { XCTAssertNoThrow([RLMRealm realmWithConfiguration:c error:nil]); }
+    XCTAssertNil(RLMGetAnyCachedRealmForPath(c.pathOnDisk.UTF8String));
+    XCTestExpectation *ex = [self expectationWithDescription:@"async-migration"];
+    __block bool migrationCalled = false;
+    c.schemaVersion = 2;
+    c.migrationBlock = ^(__unused RLMMigration *migration, __unused uint64_t oldSchemaVersion) {
+        migrationCalled = true;
+    };
+    [RLMRealm asyncOpenWithConfiguration:c
+                           callbackQueue:dispatch_get_main_queue()
+                                 callback:^(RLMRealm * _Nullable realm, NSError * _Nullable error) {
+        XCTAssertTrue(migrationCalled);
+        XCTAssertNil(error);
+        XCTAssertNotNil(realm);
+        [ex fulfill];
+    }];
+    XCTAssertFalse(migrationCalled);
+    XCTAssertNil(RLMGetAnyCachedRealmForPath(c.pathOnDisk.UTF8String));
+    [self waitForExpectationsWithTimeout:1 handler:nil];
+    XCTAssertTrue(migrationCalled);
+    XCTAssertNil(RLMGetAnyCachedRealmForPath(c.pathOnDisk.UTF8String));
 }
 
 #pragma mark - Migration Correctness
 
 - (void)testRemovingSubclass {
-    RLMObjectSchema *objectSchema = [[RLMObjectSchema alloc] initWithClassName:@"DeletedClass" objectClass:RLMObject.class properties:@[]];
+    RLMProperty *prop = [[RLMProperty alloc] initWithName:@"id"
+                                                     type:RLMPropertyTypeInt
+                                          objectClassName:nil
+                                   linkOriginPropertyName:nil
+                                                  indexed:NO
+                                                 optional:NO];
+    RLMObjectSchema *objectSchema = [[RLMObjectSchema alloc] initWithClassName:@"DeletedClass" objectClass:RLMObject.class properties:@[prop]];
     [self createTestRealmWithSchema:@[objectSchema] block:^(RLMRealm *realm) {
-        [realm createObject:@"DeletedClass" withValue:@[]];
+        [realm createObject:@"DeletedClass" withValue:@[@0]];
     }];
 
     // apply migration
@@ -729,17 +722,17 @@ RLM_ARRAY_TYPE(MigrationObject);
 
 - (void)testAddingPropertyAtEnd {
     // create schema to migrate from with single string column
-    RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationObject.class];
+    RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationTestObject.class];
     objectSchema.properties = @[objectSchema.properties[0]];
     [self createTestRealmWithSchema:@[objectSchema] block:^(RLMRealm *realm) {
-        [realm createObject:MigrationObject.className withValue:@[@1]];
-        [realm createObject:MigrationObject.className withValue:@[@2]];
+        [realm createObject:MigrationTestObject.className withValue:@[@1]];
+        [realm createObject:MigrationTestObject.className withValue:@[@2]];
     }];
 
     // apply migration
     RLMRealm *realm = [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t oldSchemaVersion) {
         XCTAssertEqual(oldSchemaVersion, 0U, @"Initial schema version should be 0");
-        [migration enumerateObjects:MigrationObject.className
+        [migration enumerateObjects:MigrationTestObject.className
                               block:^(RLMObject *oldObject, RLMObject *newObject) {
             XCTAssertThrows(oldObject[@"stringCol"], @"stringCol should not exist on old object");
             NSNumber *intObj;
@@ -751,22 +744,22 @@ RLM_ARRAY_TYPE(MigrationObject);
     }];
 
     // verify migration
-    MigrationObject *mig1 = [MigrationObject allObjectsInRealm:realm][1];
+    MigrationTestObject *mig1 = [MigrationTestObject allObjectsInRealm:realm][1];
     XCTAssertEqual(mig1.intCol, 2, @"Int column should have value 2");
     XCTAssertEqualObjects(mig1.stringCol, @"2", @"String column should be populated");
 }
 
 - (void)testAddingPropertyAtBeginningPreservesData {
     // create schema to migrate from with the second and third columns from the final data
-    RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:ThreeFieldMigrationObject.class];
+    RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:ThreeFieldMigrationTestObject.class];
     objectSchema.properties = @[objectSchema.properties[1], objectSchema.properties[2]];
 
     [self createTestRealmWithSchema:@[objectSchema] block:^(RLMRealm *realm) {
-        [realm createObject:ThreeFieldMigrationObject.className withValue:@[@1, @2]];
+        [realm createObject:ThreeFieldMigrationTestObject.className withValue:@[@1, @2]];
     }];
 
     RLMRealm *realm = [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
-        [migration enumerateObjects:ThreeFieldMigrationObject.className
+        [migration enumerateObjects:ThreeFieldMigrationTestObject.className
                               block:^(RLMObject *oldObject, RLMObject *newObject) {
             XCTAssertThrows(oldObject[@"col1"]);
             XCTAssertEqualObjects(oldObject[@"col2"], newObject[@"col2"]);
@@ -775,7 +768,7 @@ RLM_ARRAY_TYPE(MigrationObject);
     }];
 
     // verify migration
-    ThreeFieldMigrationObject *mig = [ThreeFieldMigrationObject allObjectsInRealm:realm][0];
+    ThreeFieldMigrationTestObject *mig = [ThreeFieldMigrationTestObject allObjectsInRealm:realm][0];
     XCTAssertEqual(0, mig.col1);
     XCTAssertEqual(1, mig.col2);
     XCTAssertEqual(2, mig.col3);
@@ -783,22 +776,20 @@ RLM_ARRAY_TYPE(MigrationObject);
 
 - (void)testRemoveProperty {
     // create schema with an extra column
-    RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationObject.class];
+    RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationTestObject.class];
     RLMProperty *thirdProperty = [[RLMProperty alloc] initWithName:@"deletedCol" type:RLMPropertyTypeBool objectClassName:nil linkOriginPropertyName:nil indexed:NO optional:NO];
-    thirdProperty.column = 2;
-    thirdProperty.declarationIndex = 2;
     objectSchema.properties = [objectSchema.properties arrayByAddingObject:thirdProperty];
 
     // create realm with old schema and populate
     [self createTestRealmWithSchema:@[objectSchema] block:^(RLMRealm *realm) {
-        [realm createObject:MigrationObject.className withValue:@[@1, @"1", @YES]];
-        [realm createObject:MigrationObject.className withValue:@[@2, @"2", @NO]];
+        [realm createObject:MigrationTestObject.className withValue:@[@1, @"1", @YES]];
+        [realm createObject:MigrationTestObject.className withValue:@[@2, @"2", @NO]];
     }];
 
     // apply migration
     RLMRealm *realm = [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t oldSchemaVersion) {
         XCTAssertEqual(oldSchemaVersion, 0U, @"Initial schema version should be 0");
-        [migration enumerateObjects:MigrationObject.className
+        [migration enumerateObjects:MigrationTestObject.className
                                        block:^(RLMObject *oldObject, RLMObject *newObject) {
             XCTAssertNoThrow(oldObject[@"deletedCol"], @"Deleted column should be accessible on old object.");
             XCTAssertThrows(newObject[@"deletedCol"], @"Deleted column should not be accessible on new object.");
@@ -809,20 +800,20 @@ RLM_ARRAY_TYPE(MigrationObject);
     }];
 
     // verify migration
-    MigrationObject *mig1 = [MigrationObject allObjectsInRealm:realm][1];
+    MigrationTestObject *mig1 = [MigrationTestObject allObjectsInRealm:realm][1];
     XCTAssertThrows(mig1[@"deletedCol"], @"Deleted column should no longer be accessible.");
 }
 
 - (void)testRemoveAndAddProperty {
     // create schema to migrate from with single string column
-    RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationObject.class];
+    RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationTestObject.class];
     RLMProperty *oldInt = [[RLMProperty alloc] initWithName:@"oldIntCol" type:RLMPropertyTypeInt objectClassName:nil linkOriginPropertyName:nil indexed:NO optional:NO];
     objectSchema.properties = @[oldInt, objectSchema.properties[1]];
 
     // create realm with old schema and populate
     [self createTestRealmWithSchema:@[objectSchema] block:^(RLMRealm *realm) {
-        [realm createObject:MigrationObject.className withValue:@[@1, @"1"]];
-        [realm createObject:MigrationObject.className withValue:@[@1, @"2"]];
+        [realm createObject:MigrationTestObject.className withValue:@[@1, @"1"]];
+        [realm createObject:MigrationTestObject.className withValue:@[@1, @"2"]];
     }];
 
     // object migration object
@@ -838,33 +829,33 @@ RLM_ARRAY_TYPE(MigrationObject);
     // apply migration
     RLMRealm *realm = [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t oldSchemaVersion) {
         XCTAssertEqual(oldSchemaVersion, 0U, @"Initial schema version should be 0");
-        [migration enumerateObjects:MigrationObject.className block:migrateObjectBlock];
+        [migration enumerateObjects:MigrationTestObject.className block:migrateObjectBlock];
     }];
 
     // verify migration
-    MigrationObject *mig1 = [MigrationObject allObjectsInRealm:realm][1];
+    MigrationTestObject *mig1 = [MigrationTestObject allObjectsInRealm:realm][1];
     XCTAssertThrows(mig1[@"oldIntCol"], @"Deleted column should no longer be accessible.");
 }
 
 - (void)testChangePropertyType {
     // make string an int
-    RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationObject.class];
+    RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationTestObject.class];
+    objectSchema.objectClass = RLMObject.class;
     RLMProperty *stringCol = objectSchema.properties[1];
     stringCol.type = RLMPropertyTypeInt;
-    stringCol.objcType = 'i';
     stringCol.optional = NO;
 
     // create realm with old schema and populate
     [self createTestRealmWithSchema:@[objectSchema] block:^(RLMRealm *realm) {
-        [realm createObject:MigrationObject.className withValue:@[@1, @1]];
-        [realm createObject:MigrationObject.className withValue:@[@2, @2]];
+        [realm createObject:MigrationTestObject.className withValue:@[@1, @1]];
+        [realm createObject:MigrationTestObject.className withValue:@[@2, @2]];
     }];
 
     // apply migration
     RLMRealm *realm = [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t oldSchemaVersion) {
         XCTAssertEqual(oldSchemaVersion, 0U, @"Initial schema version should be 0");
-        [migration enumerateObjects:MigrationObject.className
-                                       block:^(RLMObject *oldObject, RLMObject *newObject) {
+        [migration enumerateObjects:MigrationTestObject.className
+                              block:^(RLMObject *oldObject, RLMObject *newObject) {
             XCTAssertEqualObjects(newObject[@"intCol"], oldObject[@"intCol"]);
             NSNumber *intObj = oldObject[@"stringCol"];
             XCTAssert([intObj isKindOfClass:NSNumber.class], @"Old stringCol should be int");
@@ -873,22 +864,22 @@ RLM_ARRAY_TYPE(MigrationObject);
     }];
 
     // verify migration
-    MigrationObject *mig1 = [MigrationObject allObjectsInRealm:realm][1];
+    MigrationTestObject *mig1 = [MigrationTestObject allObjectsInRealm:realm][1];
     XCTAssertEqualObjects(mig1[@"stringCol"], @"2", @"stringCol should be string after migration.");
 }
 
 - (void)testChangeObjectLinkType {
     // create realm with old schema and populate
     [self createTestRealmWithSchema:RLMSchema.sharedSchema.objectSchema block:^(RLMRealm *realm) {
-        id obj = [realm createObject:MigrationObject.className withValue:@[@1, @"1"]];
-        [realm createObject:MigrationLinkObject.className withValue:@[obj, @[obj]]];
+        id obj = [realm createObject:MigrationTestObject.className withValue:@[@1, @"1"]];
+        [realm createObject:MigrationLinkObject.className withValue:@[obj, @[obj], @[obj]]];
     }];
 
     // Make the object link property link to a different class
     RLMRealmConfiguration *config = self.config;
     RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationLinkObject.class];
     [objectSchema.properties[0] setObjectClassName:MigrationLinkObject.className];
-    config.customSchema = [self schemaWithObjects:@[objectSchema, [RLMObjectSchema schemaForObjectClass:MigrationObject.class]]];
+    config.customSchema = [self schemaWithObjects:@[objectSchema, [RLMObjectSchema schemaForObjectClass:MigrationTestObject.class]]];
 
     // Apply migration
     config.schemaVersion = 1;
@@ -901,6 +892,8 @@ RLM_ARRAY_TYPE(MigrationObject);
 
                                            XCTAssertEqual(1U, [oldObject[@"array"] count]);
                                            XCTAssertEqual(1U, [newObject[@"array"] count]);
+                                           XCTAssertEqual(1U, [oldObject[@"set"] count]);
+                                           XCTAssertEqual(1U, [newObject[@"set"] count]);
                                        }];
     };
     RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
@@ -911,14 +904,14 @@ RLM_ARRAY_TYPE(MigrationObject);
     // create realm with old schema and populate
     RLMRealmConfiguration *config = [self config];
     [self createTestRealmWithSchema:RLMSchema.sharedSchema.objectSchema block:^(RLMRealm *realm) {
-        id obj = [realm createObject:MigrationObject.className withValue:@[@1, @"1"]];
+        id obj = [realm createObject:MigrationTestObject.className withValue:@[@1, @"1"]];
         [realm createObject:MigrationLinkObject.className withValue:@[obj, @[obj]]];
     }];
 
     // Make the array linklist property link to a different class
     RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationLinkObject.class];
     [objectSchema.properties[1] setObjectClassName:MigrationLinkObject.className];
-    config.customSchema = [self schemaWithObjects:@[objectSchema, [RLMObjectSchema schemaForObjectClass:MigrationObject.class]]];
+    config.customSchema = [self schemaWithObjects:@[objectSchema, [RLMObjectSchema schemaForObjectClass:MigrationTestObject.class]]];
 
     // Apply migration
     config.schemaVersion = 1;
@@ -931,6 +924,36 @@ RLM_ARRAY_TYPE(MigrationObject);
 
                                            XCTAssertEqual(1U, [oldObject[@"array"] count]);
                                            XCTAssertEqual(0U, [newObject[@"array"] count]);
+                                       }];
+    };
+    RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
+    RLMAssertRealmSchemaMatchesTable(self, realm);
+}
+
+- (void)testChangeSetLinkType {
+    // create realm with old schema and populate
+    RLMRealmConfiguration *config = [self config];
+    [self createTestRealmWithSchema:RLMSchema.sharedSchema.objectSchema block:^(RLMRealm *realm) {
+        id obj = [realm createObject:MigrationTestObject.className withValue:@[@1, @"1"]];
+        [realm createObject:MigrationLinkObject.className withValue:@[obj, @[obj], @[obj]]];
+    }];
+
+    // Make the set linklist property link to a different class
+    RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationLinkObject.class];
+    [objectSchema.properties[2] setObjectClassName:MigrationLinkObject.className];
+    config.customSchema = [self schemaWithObjects:@[objectSchema, [RLMObjectSchema schemaForObjectClass:MigrationTestObject.class]]];
+
+    // Apply migration
+    config.schemaVersion = 1;
+    config.migrationBlock = ^(RLMMigration *migration, uint64_t oldSchemaVersion) {
+        XCTAssertEqual(oldSchemaVersion, 0U, @"Initial schema version should be 0");
+        [migration enumerateObjects:MigrationLinkObject.className
+                                       block:^(RLMObject *oldObject, RLMObject *newObject) {
+                                           XCTAssertNotNil(oldObject[@"object"]);
+                                           XCTAssertNotNil(newObject[@"object"]);
+
+                                           XCTAssertEqual(1U, [oldObject[@"set"] count]);
+                                           XCTAssertEqual(0U, [newObject[@"set"] count]);
                                        }];
     };
     RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
@@ -1011,9 +1034,11 @@ RLM_ARRAY_TYPE(MigrationObject);
 }
 
 - (void)testEnumeratedObjectsDuringMigration {
-    [self createTestRealmWithClasses:@[StringObject.class, ArrayPropertyObject.class, IntObject.class] block:^(RLMRealm *realm) {
+    [self createTestRealmWithClasses:@[StringObject.class, ArrayPropertyObject.class, SetPropertyObject.class, IntObject.class]
+                               block:^(RLMRealm *realm) {
         [StringObject createInRealm:realm withValue:@[@"string"]];
         [ArrayPropertyObject createInRealm:realm withValue:@[@"array", @[@[@"string"]], @[@[@1]]]];
+        [SetPropertyObject createInRealm:realm withValue:@[@"set", @[@[@"string"]], @[@[@1]]]];
     }];
 
     RLMRealm *realm = [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
@@ -1031,9 +1056,255 @@ RLM_ARRAY_TYPE(MigrationObject);
             XCTAssertEqual(RLMDynamicObject.class, [[oldObject[@"array"] firstObject] class]);
             XCTAssertEqual(RLMDynamicObject.class, [[newObject[@"array"] firstObject] class]);
         }];
+
+        [migration enumerateObjects:SetPropertyObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertEqual(RLMDynamicObject.class, newObject.class);
+            XCTAssertEqual(RLMDynamicObject.class, oldObject.class);
+            XCTAssertEqual(RLMDynamicObject.class, [[oldObject[@"set"] allObjects][0] class]);
+            XCTAssertEqual(RLMDynamicObject.class, [[newObject[@"set"] allObjects][0] class]);
+        }];
     }];
 
     XCTAssertEqualObjects(@"otherString", [[StringObject allObjectsInRealm:realm].firstObject stringCol]);
+}
+
+- (void)testEnumerateObjectsAfterDeleteObjects {
+    [self createTestRealmWithClasses:@[StringObject.class, IntObject.class, BoolObject.class] block:^(RLMRealm *realm) {
+        [StringObject createInRealm:realm withValue:@[@"1"]];
+        [StringObject createInRealm:realm withValue:@[@"2"]];
+        [StringObject createInRealm:realm withValue:@[@"3"]];
+        [IntObject createInRealm:realm withValue:@[@1]];
+        [IntObject createInRealm:realm withValue:@[@2]];
+        [IntObject createInRealm:realm withValue:@[@3]];
+        [BoolObject createInRealm:realm withValue:@[@YES]];
+        [BoolObject createInRealm:realm withValue:@[@NO]];
+        [BoolObject createInRealm:realm withValue:@[@YES]];
+    }];
+
+    [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
+        __block NSInteger count = 0;
+        [migration enumerateObjects:StringObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertEqualObjects(oldObject[@"stringCol"], newObject[@"stringCol"]);
+            if ([oldObject[@"stringCol"] isEqualToString:@"2"]) {
+                [migration deleteObject:newObject];
+            }
+        }];
+        [migration enumerateObjects:StringObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertEqualObjects(oldObject[@"stringCol"], newObject[@"stringCol"]);
+            count++;
+        }];
+        XCTAssertEqual(count, 2);
+
+        count = 0;
+        [migration enumerateObjects:IntObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertEqualObjects(oldObject[@"intCol"], newObject[@"intCol"]);
+            if ([oldObject[@"intCol"] isEqualToNumber:@1]) {
+                [migration deleteObject:newObject];
+            }
+        }];
+        [migration enumerateObjects:IntObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertEqualObjects(oldObject[@"intCol"], newObject[@"intCol"]);
+            count++;
+        }];
+        XCTAssertEqual(count, 2);
+
+        [migration enumerateObjects:BoolObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertEqualObjects(oldObject[@"boolCol"], newObject[@"boolCol"]);
+            [migration deleteObject:newObject];
+        }];
+        [migration enumerateObjects:BoolObject.className block:^(__unused RLMObject *oldObject, __unused RLMObject *newObject) {
+            XCTFail(@"This line should not executed since all objects have been deleted.");
+        }];
+    }];
+}
+
+- (void)testEnumerateObjectsAfterDeleteInsertObjects {
+    [self createTestRealmWithClasses:@[StringObject.class, IntObject.class, BoolObject.class] block:^(RLMRealm *realm) {
+        [StringObject createInRealm:realm withValue:@[@"1"]];
+        [StringObject createInRealm:realm withValue:@[@"2"]];
+        [StringObject createInRealm:realm withValue:@[@"3"]];
+        [IntObject createInRealm:realm withValue:@[@1]];
+        [IntObject createInRealm:realm withValue:@[@2]];
+        [IntObject createInRealm:realm withValue:@[@3]];
+        [BoolObject createInRealm:realm withValue:@[@YES]];
+        [BoolObject createInRealm:realm withValue:@[@NO]];
+        [BoolObject createInRealm:realm withValue:@[@YES]];
+    }];
+
+    [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
+        __block NSInteger count = 0;
+        [migration enumerateObjects:StringObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertEqualObjects(oldObject[@"stringCol"], newObject[@"stringCol"]);
+            if ([newObject[@"stringCol"] isEqualToString:@"2"]) {
+                [migration deleteObject:newObject];
+                [migration createObject:StringObject.className withValue:@[@"A"]];
+            }
+        }];
+        [migration enumerateObjects:StringObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertEqualObjects(oldObject[@"stringCol"], newObject[@"stringCol"]);
+            count++;
+        }];
+        XCTAssertEqual(count, 2);
+
+        count = 0;
+        [migration enumerateObjects:IntObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertEqualObjects(oldObject[@"intCol"], newObject[@"intCol"]);
+            if ([newObject[@"intCol"] isEqualToNumber:@1]) {
+                [migration deleteObject:newObject];
+                [migration createObject:IntObject.className withValue:@[@0]];
+            }
+        }];
+        [migration enumerateObjects:IntObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertEqualObjects(oldObject[@"intCol"], newObject[@"intCol"]);
+            count++;
+        }];
+        XCTAssertEqual(count, 2);
+
+        [migration enumerateObjects:BoolObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertEqualObjects(oldObject[@"boolCol"], newObject[@"boolCol"]);
+            [migration deleteObject:newObject];
+            [migration createObject:BoolObject.className withValue:@[@NO]];
+        }];
+        [migration enumerateObjects:BoolObject.className block:^(__unused RLMObject *oldObject, __unused RLMObject *newObject) {
+            XCTFail(@"This line should not executed since all objects have been deleted.");
+        }];
+    }];
+}
+
+- (void)testEnumerateObjectTypeRemovedFromSchema {
+    [self createTestRealmWithClasses:@[IntObject.class] block:^(RLMRealm *realm) {
+        [IntObject createInRealm:realm withValue:@[@1]];
+        [IntObject createInRealm:realm withValue:@[@2]];
+    }];
+
+    RLMRealmConfiguration *config = self.config;
+    config.objectClasses = @[StringObject.class];
+    config.schemaVersion = 1;
+    __block int enumerateCalls = 0;
+    config.migrationBlock = ^(RLMMigration *migration, uint64_t) {
+        [migration enumerateObjects:IntObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertNotNil(oldObject);
+            XCTAssertNil(newObject);
+            ++enumerateCalls;
+            XCTAssertGreaterThan([oldObject[@"intCol"] intValue], 0);
+        }];
+    };
+    XCTAssertTrue([RLMRealm performMigrationForConfiguration:config error:nil]);
+    XCTAssertEqual(enumerateCalls, 2);
+}
+
+- (void)testEnumerateObjectsAfterDeleteData {
+    [self createTestRealmWithClasses:@[IntObject.class] block:^(RLMRealm *realm) {
+        [IntObject createInRealm:realm withValue:@[@1]];
+        [IntObject createInRealm:realm withValue:@[@2]];
+    }];
+
+    [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
+        [migration enumerateObjects:IntObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            XCTAssertNotNil(oldObject);
+            XCTAssertNotNil(newObject);
+        }];
+        [migration deleteDataForClassName:IntObject.className];
+        [migration enumerateObjects:IntObject.className block:^(RLMObject *, RLMObject *) {
+            XCTFail(@"should not have enumerated any objects");
+        }];
+    }];
+}
+
+- (RLMResults *)objectsOfType:(Class)cls {
+    auto config = self.config;
+    config.schemaVersion = 1;
+    RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
+    return [cls allObjectsInRealm:realm];
+}
+
+- (void)testDeleteSomeObjectsWithinMigration {
+    [self createTestRealmWithClasses:@[IntObject.class] block:^(RLMRealm *realm) {
+        [IntObject createInRealm:realm withValue:@[@1]];
+        [IntObject createInRealm:realm withValue:@[@2]];
+        [IntObject createInRealm:realm withValue:@[@3]];
+    }];
+
+    [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
+        [migration enumerateObjects:IntObject.className block:^(RLMObject *, RLMObject *newObject) {
+            if ([newObject[@"intCol"] intValue] != 2) {
+                [migration deleteObject:newObject];
+            }
+        }];
+    }];
+
+    XCTAssertEqualObjects([[self objectsOfType:IntObject.class] valueForKey:@"intCol"], (@[@2]));
+}
+
+- (void)testDeleteObjectsWithinSeparateEnumerations {
+    [self createTestRealmWithClasses:@[IntObject.class] block:^(RLMRealm *realm) {
+        [IntObject createInRealm:realm withValue:@[@1]];
+        [IntObject createInRealm:realm withValue:@[@2]];
+        [IntObject createInRealm:realm withValue:@[@3]];
+    }];
+
+    [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
+        [migration enumerateObjects:IntObject.className block:^(RLMObject *, RLMObject *newObject) {
+            if ([newObject[@"intCol"] intValue] == 1) {
+                [migration deleteObject:newObject];
+            }
+        }];
+        [migration enumerateObjects:IntObject.className block:^(RLMObject *, RLMObject *newObject) {
+            if ([newObject[@"intCol"] intValue] == 3) {
+                [migration deleteObject:newObject];
+            }
+        }];
+    }];
+
+    XCTAssertEqualObjects([[self objectsOfType:IntObject.class] valueForKey:@"intCol"], (@[@2]));
+}
+
+- (void)testDeleteAndRecreateObjectsWithinMigration {
+    [self createTestRealmWithClasses:@[IntObject.class, PrimaryIntObject.class] block:^(RLMRealm *realm) {
+        [IntObject createInRealm:realm withValue:@[@1]];
+        [IntObject createInRealm:realm withValue:@[@2]];
+        [PrimaryIntObject createInRealm:realm withValue:@[@1]];
+        [PrimaryIntObject createInRealm:realm withValue:@[@2]];
+    }];
+
+    [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
+        [migration enumerateObjects:IntObject.className block:^(RLMObject *, RLMObject *newObject) {
+            [migration deleteObject:newObject];
+        }];
+        [migration enumerateObjects:PrimaryIntObject.className block:^(RLMObject *, RLMObject *newObject) {
+            [migration deleteObject:newObject];
+        }];
+
+        [migration createObject:IntObject.className withValue:@[@2]];
+        [migration createObject:IntObject.className withValue:@[@4]];
+        [migration createObject:PrimaryIntObject.className withValue:@[@2]];
+        [migration createObject:PrimaryIntObject.className withValue:@[@4]];
+    }];
+
+    XCTAssertEqualObjects([[self objectsOfType:IntObject.class] valueForKey:@"intCol"], (@[@2, @4]));
+    XCTAssertEqualObjects([[self objectsOfType:PrimaryIntObject.class] valueForKey:@"intCol"], (@[@2, @4]));
+}
+
+- (void)testDeleteAllDataAndRecreateObjectsWithinMigration {
+    [self createTestRealmWithClasses:@[IntObject.class, PrimaryIntObject.class] block:^(RLMRealm *realm) {
+        [IntObject createInRealm:realm withValue:@[@1]];
+        [IntObject createInRealm:realm withValue:@[@2]];
+        [PrimaryIntObject createInRealm:realm withValue:@[@1]];
+        [PrimaryIntObject createInRealm:realm withValue:@[@2]];
+    }];
+
+    [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
+        [migration deleteDataForClassName:IntObject.className];
+        [migration deleteDataForClassName:PrimaryIntObject.className];
+
+        [migration createObject:IntObject.className withValue:@[@2]];
+        [migration createObject:IntObject.className withValue:@[@4]];
+        [migration createObject:PrimaryIntObject.className withValue:@[@2]];
+        [migration createObject:PrimaryIntObject.className withValue:@[@4]];
+    }];
+
+    XCTAssertEqualObjects([[self objectsOfType:IntObject.class] valueForKey:@"intCol"], (@[@2, @4]));
+    XCTAssertEqualObjects([[self objectsOfType:PrimaryIntObject.class] valueForKey:@"intCol"], (@[@2, @4]));
 }
 
 - (void)testRequiredToNullableAutoMigration {
@@ -1085,15 +1356,15 @@ RLM_ARRAY_TYPE(MigrationObject);
                                                           [NSDate dateWithTimeIntervalSince1970:2]]];
     }];
 
+    objectSchema.objectClass = RLMObject.class;
     [objectSchema.properties setValue:@NO forKey:@"optional"];
 
     RLMRealm *realm;
     @autoreleasepool {
-        RLMRealmConfiguration *config = [RLMRealmConfiguration new];
-        config.fileURL = RLMTestRealmURL();
+        RLMRealmConfiguration *config = self.config;
         config.customSchema = [self schemaWithObjects:@[ objectSchema ]];
         config.schemaVersion = 1;
-        XCTAssertNil([RLMRealm migrateRealm:config]);
+        XCTAssertTrue([RLMRealm performMigrationForConfiguration:config error:nil]);
 
         realm = [RLMRealm realmWithConfiguration:config error:nil];
         RLMAssertRealmSchemaMatchesTable(self, realm);
@@ -1103,22 +1374,22 @@ RLM_ARRAY_TYPE(MigrationObject);
     XCTAssertEqual(2U, allObjects.count);
 
     AllOptionalTypes *obj = allObjects[0];
-    XCTAssertEqualObjects(@0, obj.intObj);
-    XCTAssertEqualObjects(@0, obj.floatObj);
-    XCTAssertEqualObjects(@0, obj.doubleObj);
-    XCTAssertEqualObjects(@0, obj.boolObj);
-    XCTAssertEqualObjects(@"", obj.string);
-    XCTAssertEqualObjects(NSData.data, obj.data);
-    XCTAssertEqualObjects([NSDate dateWithTimeIntervalSince1970:0], obj.date);
+    XCTAssertEqualObjects(@0, obj[@"intObj"]);
+    XCTAssertEqualObjects(@0, obj[@"floatObj"]);
+    XCTAssertEqualObjects(@0, obj[@"doubleObj"]);
+    XCTAssertEqualObjects(@0, obj[@"boolObj"]);
+    XCTAssertEqualObjects(@"", obj[@"string"]);
+    XCTAssertEqualObjects(NSData.data, obj[@"data"]);
+    XCTAssertEqualObjects([NSDate dateWithTimeIntervalSince1970:0], obj[@"date"]);
 
     obj = allObjects[1];
-    XCTAssertEqualObjects(@0, obj.intObj);
-    XCTAssertEqualObjects(@0, obj.floatObj);
-    XCTAssertEqualObjects(@0, obj.doubleObj);
-    XCTAssertEqualObjects(@0, obj.boolObj);
-    XCTAssertEqualObjects(@"", obj.string);
-    XCTAssertEqualObjects(NSData.data, obj.data);
-    XCTAssertEqualObjects([NSDate dateWithTimeIntervalSince1970:0], obj.date);
+    XCTAssertEqualObjects(@0, obj[@"intObj"]);
+    XCTAssertEqualObjects(@0, obj[@"floatObj"]);
+    XCTAssertEqualObjects(@0, obj[@"doubleObj"]);
+    XCTAssertEqualObjects(@0, obj[@"boolObj"]);
+    XCTAssertEqualObjects(@"", obj[@"string"]);
+    XCTAssertEqualObjects(NSData.data, obj[@"data"]);
+    XCTAssertEqualObjects([NSDate dateWithTimeIntervalSince1970:0], obj[@"date"]);
 }
 
 - (void)testMigrationAfterReorderingProperties {
@@ -1133,15 +1404,14 @@ RLM_ARRAY_TYPE(MigrationObject);
     }];
 
     objectSchema = [RLMObjectSchema schemaForObjectClass:RequiredPropertiesObject.class];
-    RLMRealmConfiguration *config = [RLMRealmConfiguration new];
-    config.fileURL = RLMTestRealmURL();
+    RLMRealmConfiguration *config = self.config;
     config.customSchema = [self schemaWithObjects:@[objectSchema]];
     config.schemaVersion = 1;
     config.migrationBlock = ^(RLMMigration *migration, uint64_t) {
         [migration createObject:RequiredPropertiesObject.className withValue:@[@"World", [NSData data], [NSDate date]]];
     };
 
-    XCTAssertNil([RLMRealm migrateRealm:config]);
+    XCTAssertTrue([RLMRealm performMigrationForConfiguration:config error:nil]);
     RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
 
     RLMResults *allObjects = [RequiredPropertiesObject allObjectsInRealm:realm];
@@ -1149,140 +1419,208 @@ RLM_ARRAY_TYPE(MigrationObject);
     XCTAssertEqualObjects(@"World", [allObjects[1] stringCol]);
 }
 
-- (void)testDateTimeFormatAutoMigration {
-    static const int cookieValue = 0xDEADBEEF;
+- (void)testModifyPrimaryKeyInMigration {
+    RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:PrimaryStringObject.class];
 
-    NSDate *distantPast = NSDate.distantPast;
-    NSDate *distantFuture = NSDate.distantFuture;
-    NSDate *beforeEpoch = [NSDate dateWithTimeIntervalSince1970:-100];
-    NSDate *epoch = [NSDate dateWithTimeIntervalSince1970:0];
-    NSDate *afterEpoch = [NSDate dateWithTimeIntervalSince1970:100];
-    NSDate *referenceDate = [NSDate dateWithTimeIntervalSinceReferenceDate:0];
-
-    NSArray *expectedDates = @[distantPast, distantFuture, beforeEpoch, epoch, afterEpoch, referenceDate];
-
-    RLMRealmConfiguration *config = [RLMRealmConfiguration defaultConfiguration];
-    config.objectClasses = @[[DateMigrationObject class]];
-
-    @autoreleasepool {
-#if RLM_OLD_DATE_FORMAT
-        RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
-        [realm beginWriteTransaction];
-        for (NSDate *date in expectedDates) {
-            [DateMigrationObject createInRealm:realm withValue:@[date, date, date, date, @(cookieValue)]];
-            [DateMigrationObject createInRealm:realm withValue:@[date, NSNull.null, date, NSNull.null, @(cookieValue)]];
+    objectSchema.primaryKeyProperty = objectSchema[@"intCol"];
+    [self createTestRealmWithSchema:@[objectSchema] block:^(RLMRealm *realm) {
+        for (int i = 0; i < 10; ++i) {
+            [PrimaryStringObject createInRealm:realm withValue:@[@(i).stringValue, @(i + 10)]];
         }
-        [realm commitWriteTransaction];
+    }];
 
-        NSURL *url = [config.fileURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:@"fileformat-old-date.realm"];
-        [realm writeCopyToURL:url encryptionKey:nil error:nil];
-        NSLog(@"wrote pre-migration realm to %@", url);
-#else
-        NSURL *bundledRealmURL = [[NSBundle bundleForClass:[DateMigrationObject class]]
-                                  URLForResource:@"fileformat-old-date" withExtension:@"realm"];
-        [NSFileManager.defaultManager copyItemAtURL:bundledRealmURL toURL:config.fileURL error:nil];
+    auto realm = [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
+        [migration enumerateObjects:@"PrimaryStringObject" block:^(RLMObject *oldObject, RLMObject *newObject) {
+            newObject[@"stringCol"] = [oldObject[@"intCol"] stringValue];
+        }];
+    }];
 
-        RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
-        RLMResults *dates = [DateMigrationObject allObjectsInRealm:realm];
-        XCTAssertEqual(expectedDates.count * 2, dates.count);
-        for (NSUInteger i = 0; i < expectedDates.count; ++i) {
-            NSDate *expected = expectedDates[i];
-            DateMigrationObject *obj = dates[i * 2];
-            XCTAssertEqualObjects(obj.nonNullNonIndexed, expected);
-            XCTAssertEqualObjects(obj.nonNullIndexed, expected);
-            XCTAssertEqualObjects(obj.nullNonIndexed, expected);
-            XCTAssertEqualObjects(obj.nullIndexed, expected);
-            XCTAssertEqual(obj.cookie, cookieValue);
-
-            obj = dates[i * 2 + 1];
-            XCTAssertEqualObjects(obj.nonNullNonIndexed, expected);
-            XCTAssertEqualObjects(obj.nonNullIndexed, expected);
-            XCTAssertNil(obj.nullNonIndexed);
-            XCTAssertNil(obj.nullIndexed);
-            XCTAssertEqual(obj.cookie, cookieValue);
-        }
-
-        for (NSDate *date in expectedDates) {
-            RLMResults *results = [DateMigrationObject objectsInRealm:realm
-                                   where:@"nonNullIndexed = %@ AND nullIndexed = %@",
-                                   date, date];
-            XCTAssertEqual(1U, results.count);
-            DateMigrationObject *obj = results.firstObject;
-            XCTAssertEqualObjects(date, obj.nonNullIndexed);
-            XCTAssertEqualObjects(date, obj.nullIndexed);
-
-            results = [DateMigrationObject objectsInRealm:realm
-                       where:@"nonNullIndexed = %@ AND nullIndexed = nil", date];
-            XCTAssertEqual(1U, results.count);
-            obj = results.firstObject;
-            XCTAssertEqualObjects(date, obj.nonNullIndexed);
-            XCTAssertNil(obj.nullIndexed);
-        }
-#endif
-    }
-
-    @autoreleasepool {
-        NSURL *bundledRealmURL = [[NSBundle bundleForClass:[DateMigrationObject class]]
-                                  URLForResource:@"fileformat-pre-null" withExtension:@"realm"];
-        [NSFileManager.defaultManager removeItemAtURL:config.fileURL error:nil];
-        [NSFileManager.defaultManager copyItemAtURL:bundledRealmURL toURL:config.fileURL error:nil];
-
-        config.schemaVersion = 1; // Nullability of some properties changed
-        RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
-        RLMResults *dates = [DateMigrationObject allObjectsInRealm:realm];
-        XCTAssertEqual(expectedDates.count, dates.count);
-        for (NSUInteger i = 0; i < expectedDates.count; ++i) {
-            NSDate *expected = expectedDates[i];
-            DateMigrationObject *obj = dates[i];
-            XCTAssertEqualObjects(obj.nonNullNonIndexed, expected);
-            XCTAssertEqualObjects(obj.nonNullIndexed, expected);
-            XCTAssertEqualObjects(obj.nullNonIndexed, expected);
-            XCTAssertEqualObjects(obj.nullIndexed, expected);
-            XCTAssertEqual(obj.cookie, cookieValue);
-        }
+    for (int i = 10; i < 20; ++i) {
+        auto obj = [PrimaryStringObject objectInRealm:realm forPrimaryKey:@(i).stringValue];
+        XCTAssertNotNil(obj);
+        XCTAssertEqual(obj.intCol, i);
     }
 }
 
-- (void)testMigratingFromMixed {
-    NSArray *values = @[@YES, @1, @1.1, @1.2f, @"str",
-                        [@"data" dataUsingEncoding:NSUTF8StringEncoding],
-                        [NSDate dateWithTimeIntervalSince1970:100]];
-    RLMRealmConfiguration *config = [RLMRealmConfiguration defaultConfiguration];
-    config.objectClasses = @[[AllTypesObject class], [LinkToAllTypesObject class], [StringObject class]];
+- (void)testChangeEmptyTableFromTopLevelToEmbedded {
+    RLMObjectSchema *fromChild = [RLMObjectSchema schemaForObjectClass:EmbeddedIntObject.class];
+    fromChild.isEmbedded = false;
+    RLMObjectSchema *fromParent = [RLMObjectSchema schemaForObjectClass:EmbeddedIntParentObject.class];
 
-#if 0 // Code for generating the test realm
-    RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
-    [realm beginWriteTransaction];
-    for (id value in values) {
-        [AllTypesObject createInRealm:realm withValue:@[@NO, @0, @0, @0, @"",
-                                                        NSData.data, NSDate.date,
-                                                        @NO, @0, value, NSNull.null]];
-    }
-    [realm commitWriteTransaction];
+    RLMObjectSchema *toChild = [RLMObjectSchema schemaForObjectClass:EmbeddedIntObject.class];
+    RLMObjectSchema *toParent = [RLMObjectSchema schemaForObjectClass:EmbeddedIntParentObject.class];
 
-    NSURL *url = [config.fileURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:@"mixed-column.realm"];
-    [realm writeCopyToURL:url encryptionKey:nil error:nil];
-    NSLog(@"wrote pre-migration realm to %@", url);
-#else
-    NSURL *bundledRealmURL = [[NSBundle bundleForClass:[DateMigrationObject class]]
-                              URLForResource:@"mixed-column" withExtension:@"realm"];
-    [NSFileManager.defaultManager removeItemAtURL:config.fileURL error:nil];
-    [NSFileManager.defaultManager copyItemAtURL:bundledRealmURL toURL:config.fileURL error:nil];
+    [self assertMigrationRequiredForChangeFrom:@[fromChild, fromParent] to:@[toChild, toParent]];
+}
 
-    __block bool migrationCalled = false;
-    config.schemaVersion = 1;
-    config.migrationBlock = ^(RLMMigration *migration, uint64_t) {
-        __block NSUInteger i = values.count;
-        [migration enumerateObjects:@"AllTypesObject" block:^(RLMObject *oldObject, RLMObject *newObject) {
-            XCTAssertEqualObjects(values[--i], oldObject[@"mixedCol"]);
-            RLMAssertThrowsWithReasonMatching(newObject[@"mixedCol"],
-                                              @"Invalid property name `mixedCol` for class `AllTypesObject`.");
+- (void)testChangeEmptyTableFromEmbeddedToTopLevel {
+    RLMObjectSchema *fromChild = [RLMObjectSchema schemaForObjectClass:EmbeddedIntObject.class];
+    RLMObjectSchema *fromParent = [RLMObjectSchema schemaForObjectClass:EmbeddedIntParentObject.class];
+
+    RLMObjectSchema *toChild = [RLMObjectSchema schemaForObjectClass:EmbeddedIntObject.class];
+    toChild.isEmbedded = false;
+    RLMObjectSchema *toParent = [RLMObjectSchema schemaForObjectClass:EmbeddedIntParentObject.class];
+
+    [self assertMigrationRequiredForChangeFrom:@[fromChild, fromParent] to:@[toChild, toParent]];
+}
+
+- (void)testChangeToEmbeddedRequiresMigration {
+    RLMObjectSchema *fromChild = [RLMObjectSchema schemaForObjectClass:EmbeddedIntObject.class];
+    fromChild.isEmbedded = false;
+    RLMObjectSchema *fromParent = [RLMObjectSchema schemaForObjectClass:EmbeddedIntParentObject.class];
+
+    RLMObjectSchema *toChild = [RLMObjectSchema schemaForObjectClass:EmbeddedIntObject.class];
+    RLMObjectSchema *toParent = [RLMObjectSchema schemaForObjectClass:EmbeddedIntParentObject.class];
+    
+    [self createTestRealmWithSchema:@[fromChild, fromParent] block:^(RLMRealm *realm) {
+        EmbeddedIntObject *childObject = (EmbeddedIntObject *)[realm createObject:EmbeddedIntObject.className withValue:@[@42]];
+        [realm createObject:EmbeddedIntParentObject.className withValue:@[@42, childObject, NSNull.null]];
+        [realm createObject:EmbeddedIntParentObject.className withValue:@[@43, childObject, NSNull.null]];
+    }];
+    
+    [self assertMigrationRequiredForChangeFrom:@[fromChild, fromParent] to:@[toChild, toParent]];
+}
+
+- (void)testChangeTableToEmbeddedWithoutBacklinks {
+    RLMObjectSchema *fromChild = [RLMObjectSchema schemaForObjectClass:EmbeddedIntObject.class];
+    fromChild.isEmbedded = false;
+    RLMObjectSchema *toChild = [RLMObjectSchema schemaForObjectClass:EmbeddedIntObject.class];
+    [self createTestRealmWithSchema:@[fromChild] block:^(RLMRealm *) {}];
+    
+    RLMRealmConfiguration *realmConfiguration = self.config;
+    realmConfiguration.schemaVersion = 1;
+    realmConfiguration.customSchema = [self schemaWithObjects:@[toChild]];
+    NSError *error;
+    XCTAssertFalse([RLMRealm performMigrationForConfiguration:realmConfiguration error:&error]);
+    XCTAssertNotNil(error);
+}
+
+- (void)testChangeTableToEmbeddedWithOnlyOneLinkPerObject {
+    RLMObjectSchema *fromChild = [RLMObjectSchema schemaForObjectClass:EmbeddedIntObject.class];
+    fromChild.isEmbedded = false;
+    RLMObjectSchema *fromParent = [RLMObjectSchema schemaForObjectClass:EmbeddedIntParentObject.class];
+
+    [self createTestRealmWithSchema:@[fromChild, fromParent] block:^(RLMRealm *realm) {
+        EmbeddedIntObject *childObject1 = (EmbeddedIntObject *)[realm createObject:EmbeddedIntObject.className withValue:@[@42]];
+        [realm createObject:EmbeddedIntParentObject.className withValue:@[@42, childObject1, NSNull.null]];
+        EmbeddedIntObject *childObject2 = (EmbeddedIntObject *)[realm createObject:EmbeddedIntObject.className withValue:@[@43]];
+        [realm createObject:EmbeddedIntParentObject.className withValue:@[@43, childObject2, NSNull.null]];
+    }];
+    
+    __block int parentEnumerateCalls = 0;
+    __block int childEnumerateCalls = 0;
+    RLMRealm *realm = [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
+        [migration enumerateObjects:EmbeddedIntParentObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            parentEnumerateCalls++;
+            XCTAssertNotNil(oldObject);
+            XCTAssertNotNil(newObject);
+            NSNumber *newIntProperty = newObject[@"object"][@"intCol"];
+            XCTAssertEqual(oldObject[@"object"][@"intCol"], newIntProperty);
+            XCTAssert([newIntProperty isEqual: @42] || [newIntProperty isEqual:@43]);
         }];
+        [migration enumerateObjects:EmbeddedIntObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            childEnumerateCalls++;
+            XCTAssertNotNil(oldObject);
+            XCTAssertNotNil(newObject);
+            NSNumber *newIntProperty = newObject[@"intCol"];
+            XCTAssertEqual(oldObject[@"intCol"], newIntProperty);
+            XCTAssert([newIntProperty isEqual:@42] || [newIntProperty isEqual:@43]);
+        }];
+    }];
+    XCTAssertNotNil(realm);
+    XCTAssertEqual(parentEnumerateCalls, 2);
+    XCTAssertEqual(childEnumerateCalls, 2);
+    RLMResults<EmbeddedIntParentObject *> *parentObjects = RLMGetObjects(realm, EmbeddedIntParentObject.className, nil);
+    XCTAssertEqual(parentObjects.count, 2U);
+    EmbeddedIntParentObject *firstParentObject = parentObjects[0];
+    XCTAssertEqual(firstParentObject.pk, 42);
+    EmbeddedIntObject *firstParentsChild = firstParentObject.object;
+    XCTAssertEqual(firstParentsChild.intCol, 42);
+    EmbeddedIntParentObject *secondParentObject = parentObjects[1];
+    EmbeddedIntObject *secondParentsChild = secondParentObject.object;
+    XCTAssertEqual(secondParentsChild.intCol, 43);
+}
+
+- (void)testChangeToEmbeddedWithMultipleBacklinksWithoutProperMigration {
+    RLMObjectSchema *fromChild = [RLMObjectSchema schemaForObjectClass:EmbeddedIntObject.class];
+    fromChild.isEmbedded = false;
+    RLMObjectSchema *fromParent = [RLMObjectSchema schemaForObjectClass:EmbeddedIntParentObject.class];
+
+    [self createTestRealmWithSchema:@[fromChild, fromParent] block:^(RLMRealm *realm) {
+        EmbeddedIntObject *childObject = (EmbeddedIntObject *)[realm createObject:EmbeddedIntObject.className withValue:@[@42]];
+        [realm createObject:EmbeddedIntParentObject.className withValue:@[@42, childObject, NSNull.null]];
+        [realm createObject:EmbeddedIntParentObject.className withValue:@[@43, childObject, NSNull.null]];
+    }];
+    
+    __block bool migrationCalled = false;
+    [self failToMigrateTestRealmWithBlock:^(RLMMigration *, uint64_t) {
         migrationCalled = true;
-    };
-    XCTAssertNil([RLMRealm migrateRealm:config]);
-    XCTAssertTrue(migrationCalled);
-#endif
+    }];
+    XCTAssert(migrationCalled);
+}
+
+- (void)testConvertToEmbeddedWithMultipleIncomingLinksResolvedInMigrationBlock {
+    RLMObjectSchema *fromChild = [RLMObjectSchema schemaForObjectClass:EmbeddedIntObject.class];
+    fromChild.isEmbedded = false;
+    RLMObjectSchema *fromParent = [RLMObjectSchema schemaForObjectClass:EmbeddedIntParentObject.class];
+
+    [self createTestRealmWithSchema:@[fromChild, fromParent] block:^(RLMRealm *realm) {
+        EmbeddedIntObject *childObject = (EmbeddedIntObject *)[realm createObject:EmbeddedIntObject.className withValue:@[@42]];
+        [realm createObject:EmbeddedIntParentObject.className withValue:@[@42, childObject, NSNull.null]];
+        [realm createObject:EmbeddedIntParentObject.className withValue:@[@43, childObject, NSNull.null]];
+    }];
+    
+    __block int parentEnumerateCalls = 0;
+    __block int childEnumerateCalls = 0;
+    RLMRealm *realm = [self migrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
+        [migration enumerateObjects:EmbeddedIntParentObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            parentEnumerateCalls++;
+            XCTAssertNotNil(oldObject);
+            XCTAssertNotNil(newObject);
+            newObject[@"object"] = nil;
+        }];
+        [migration enumerateObjects:EmbeddedIntObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            childEnumerateCalls++;
+            XCTAssertNotNil(oldObject);
+            XCTAssertNotNil(newObject);
+            [migration deleteObject:newObject];
+        }];
+    }];
+    XCTAssertEqual(parentEnumerateCalls, 2);
+    XCTAssertEqual(childEnumerateCalls, 1);
+
+    RLMResults<EmbeddedIntParentObject *> *parentObjects = RLMGetObjects(realm, EmbeddedIntParentObject.className, nil);
+    XCTAssertEqual(parentObjects.count, 2U);
+    EmbeddedIntParentObject *firstParentObject = parentObjects[0];
+    XCTAssertNil(firstParentObject.object);
+    EmbeddedIntParentObject *secondParentObject = parentObjects[1];
+    XCTAssertNil(secondParentObject.object);
+    RLMResults<EmbeddedIntObject *> *childObjects = RLMGetObjects(realm, EmbeddedIntObject.className, nil);
+    XCTAssertEqual(childObjects.count, 0U);
+}
+
+- (void)testConvertToEmbeddedAddingMoreLinks {
+    RLMObjectSchema *fromChild = [RLMObjectSchema schemaForObjectClass:EmbeddedIntObject.class];
+    fromChild.isEmbedded = false;
+    RLMObjectSchema *fromParent = [RLMObjectSchema schemaForObjectClass:EmbeddedIntParentObject.class];
+
+    [self createTestRealmWithSchema:@[fromChild, fromParent] block:^(RLMRealm *realm) {
+        EmbeddedIntObject *childObject = (EmbeddedIntObject *)[realm createObject:EmbeddedIntObject.className withValue:@[@42]];
+        [realm createObject:EmbeddedIntParentObject.className withValue:@[@42, childObject, NSNull.null]];
+        [realm createObject:EmbeddedIntParentObject.className withValue:@[@43, childObject, NSNull.null]];
+    }];
+    
+    __block int parentEnumerateCalls = 0;
+    [self failToMigrateTestRealmWithBlock:^(RLMMigration *migration, uint64_t) {
+        [migration enumerateObjects:EmbeddedIntParentObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
+            parentEnumerateCalls++;
+            XCTAssertNotNil(oldObject);
+            XCTAssertNotNil(newObject);
+            RLMObject *childObject = newObject[@"object"];
+            [migration createObject:EmbeddedIntParentObject.className withValue:@[@43, childObject, NSNull.null]];
+        }];
+    }];
+    XCTAssertEqual(parentEnumerateCalls, 2);
 }
 
 #pragma mark - Property Rename
@@ -1292,6 +1630,7 @@ RLM_ARRAY_TYPE(MigrationObject);
 - (void)testMigrationRenameProperty {
     RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:AllTypesObject.class];
     RLMObjectSchema *stringObjectSchema = [RLMObjectSchema schemaForObjectClass:StringObject.class];
+    RLMObjectSchema *mixedObjectSchema = [RLMObjectSchema schemaForObjectClass:MixedObject.class];
     RLMObjectSchema *linkingObjectsSchema = [RLMObjectSchema schemaForObjectClass:LinkToAllTypesObject.class];
     NSMutableArray *beforeProperties = [NSMutableArray arrayWithCapacity:objectSchema.properties.count];
     for (RLMProperty *property in objectSchema.properties) {
@@ -1300,31 +1639,52 @@ RLM_ARRAY_TYPE(MigrationObject);
     NSArray *afterProperties = objectSchema.properties;
     objectSchema.properties = beforeProperties;
 
-    NSDate *now = [NSDate dateWithTimeIntervalSince1970:100000];
-    id inputValue = @[@YES, @1, @1.1f, @1.11, @"string", [NSData dataWithBytes:"a" length:1], now, @YES, @11, @[@"a"]];
+    NSDictionary *valueDictionary = [AllTypesObject values:1 stringObject:(id)@[@"a"] mixedObject:(id)@[@"a"]];
+    NSMutableArray *inputValue = [NSMutableArray arrayWithCapacity:valueDictionary.count];
+    for (NSString *key in [afterProperties valueForKey:@"name"]) {
+        [inputValue addObject:valueDictionary[key]];
+    }
 
-    [self createTestRealmWithSchema:@[objectSchema, stringObjectSchema, linkingObjectsSchema] block:^(RLMRealm *realm) {
+    [self createTestRealmWithSchema:@[objectSchema, stringObjectSchema, mixedObjectSchema, linkingObjectsSchema]
+                              block:^(RLMRealm *realm) {
         [AllTypesObject createInRealm:realm withValue:inputValue];
     }];
 
     objectSchema.properties = afterProperties;
 
-    RLMRealmConfiguration *config = [self renameConfigurationWithObjectSchemas:@[objectSchema, stringObjectSchema, linkingObjectsSchema]
+    RLMRealmConfiguration *config = [self renameConfigurationWithObjectSchemas:@[objectSchema, stringObjectSchema, mixedObjectSchema, linkingObjectsSchema]
                                                                 migrationBlock:^(RLMMigration *migration, __unused uint64_t oldSchemaVersion) {
         [afterProperties enumerateObjectsUsingBlock:^(RLMProperty *property, NSUInteger idx, __unused BOOL *stop) {
             [migration renamePropertyForClass:AllTypesObject.className oldName:[beforeProperties[idx] name] newName:property.name];
             [migration enumerateObjects:AllTypesObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
                 XCTAssertNotNil(oldObject[[beforeProperties[idx] name]]);
                 RLMAssertThrowsWithReasonMatching(newObject[[beforeProperties[idx] name]], @"Invalid property name");
-                if (![property.objectClassName isEqualToString:@""]) { return; }
-                XCTAssertEqualObjects(oldObject[[beforeProperties[idx] name]], newObject[property.name]);
+                if ([property.objectClassName isEqualToString:@""]) {
+                    XCTAssertEqualObjects(oldObject[[beforeProperties[idx] name]], newObject[property.name]);
+                }
             }];
         }];
         [migration enumerateObjects:AllTypesObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
-            XCTAssertEqualObjects([oldObject.description stringByReplacingOccurrencesOfString:@"before_" withString:@""], newObject.description);
+            NSString *(^regexReplace)(NSString *) = ^(NSString *desc) {
+                NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"<0x[0-9a-f]+>"
+                                                                                       options:NSRegularExpressionCaseInsensitive
+                                                                                         error:nil];
+                return [regex stringByReplacingMatchesInString:desc
+                                                       options:0
+                                                         range:NSMakeRange(0, desc.length)
+                                                  withTemplate:@""];
+            };
+
+            NSString *oldDescription = [oldObject.description stringByReplacingOccurrencesOfString:@"before_" withString:@""];
+            NSString *newDescription = newObject.description;
+
+            oldDescription = regexReplace(oldDescription);
+            newDescription = regexReplace(newDescription);
+
+            XCTAssertEqualObjects(oldDescription, newDescription);
         }];
     }];
-    XCTAssertNil([RLMRealm migrateRealm:config]);
+    XCTAssertTrue([RLMRealm performMigrationForConfiguration:config error:nil]);
 
     RLMRealm *realm = [RLMRealm realmWithConfiguration:config error:nil];
     RLMAssertRealmSchemaMatchesTable(self, realm);
@@ -1343,7 +1703,12 @@ RLM_ARRAY_TYPE(MigrationObject);
     XCTAssertEqualObjects(inputValue[6], obj.dateCol);
     XCTAssertEqualObjects(inputValue[7], @(obj.cBoolCol));
     XCTAssertEqualObjects(inputValue[8], @(obj.longCol));
-    XCTAssertEqualObjects(inputValue[9], @[obj.objectCol.stringCol]);
+    XCTAssertEqualObjects(inputValue[9], obj.decimalCol);
+    XCTAssertEqualObjects(inputValue[10], obj.objectIdCol);
+    XCTAssertEqualObjects(inputValue[11], obj.uuidCol);
+    XCTAssertEqualObjects(inputValue[12], @[obj.objectCol.stringCol]);
+    XCTAssertEqualObjects(inputValue[13], @[obj.mixedObjectCol.anyCol]);
+    XCTAssertEqualObjects(inputValue[14], obj.anyCol);
 }
 
 - (void)testMultipleMigrationRenameProperty {
@@ -1358,8 +1723,7 @@ RLM_ARRAY_TYPE(MigrationObject);
 
     __block bool migrationCalled = false;
 
-    RLMRealmConfiguration *config = [RLMRealmConfiguration new];
-    config.fileURL = RLMTestRealmURL();
+    RLMRealmConfiguration *config = self.config;
     config.customSchema = [self schemaWithObjects:@[schema]];
     config.schemaVersion = 2;
     config.migrationBlock = ^(RLMMigration *migration, uint64_t oldVersion){
@@ -1370,8 +1734,8 @@ RLM_ARRAY_TYPE(MigrationObject);
             [migration enumerateObjects:StringObject.className block:^(RLMObject *oldObject, RLMObject *newObject) {
                 oldValue = oldObject[@"stringCol0"];
                 XCTAssertNotNil(oldValue);
-                XCTAssertEqualObjects(newObject[@"stringCol1"], oldValue);
                 RLMAssertThrowsWithReasonMatching(newObject[@"stringCol0"], @"Invalid property name");
+                RLMAssertThrowsWithReasonMatching(newObject[@"stringCol1"], @"Invalid property name");
             }];
         }
         if (oldVersion < 2) {
@@ -1386,7 +1750,7 @@ RLM_ARRAY_TYPE(MigrationObject);
         }
     };
 
-    XCTAssertNil([RLMRealm migrateRealm:config]);
+    XCTAssertTrue([RLMRealm performMigrationForConfiguration:config error:nil]);
     XCTAssertTrue(migrationCalled);
     XCTAssertEqualObjects(@"0", [[[StringObject allObjectsInRealm:[RLMRealm realmWithConfiguration:config error:nil]] firstObject] stringCol]);
 }
@@ -1409,7 +1773,7 @@ RLM_ARRAY_TYPE(MigrationObject);
 
 - (void)testMigrationRenamePropertySetPrimaryKey {
     [self assertPropertyRenameError:nil firstSchemaTransform:nil
-                     secondSchemaTransform:^(RLMObjectSchema *schema, __unused RLMProperty *beforeProperty, RLMProperty *afterProperty) {
+              secondSchemaTransform:^(RLMObjectSchema *schema, RLMProperty *, RLMProperty *afterProperty) {
         schema.primaryKeyProperty = afterProperty;
     }];
 }
@@ -1442,22 +1806,22 @@ RLM_ARRAY_TYPE(MigrationObject);
 // Unsuccessful Property Rename Tests
 
 - (void)testMigrationRenamePropertySetRequired {
-    [self assertPropertyRenameError:@"Migration is required due to the following errors:\n- Nullability for property 'stringCol' has been changed from true to false."
+    [self assertPropertyRenameError:@"Cannot rename property 'StringObject.before_stringCol' to 'stringCol' because it would change from optional to required."
                firstSchemaTransform:^(__unused RLMObjectSchema *schema, __unused RLMProperty *beforeProperty, RLMProperty *afterProperty) {
         afterProperty.optional = NO;
     } secondSchemaTransform:nil];
 }
 
 - (void)testMigrationRenamePropertyTypeMismatch {
-    [self assertPropertyRenameError:@"Old property 'before_stringCol' of type 'int' cannot be renamed to property 'stringCol' of type 'string'."
-               firstSchemaTransform:^(__unused RLMObjectSchema *schema, RLMProperty *beforeProperty, __unused RLMProperty *afterProperty) {
+    [self assertPropertyRenameError:@"Cannot rename property 'StringObject.before_stringCol' to 'stringCol' because it would change from type 'int' to 'string'."
+               firstSchemaTransform:^(RLMObjectSchema *, RLMProperty *beforeProperty, RLMProperty *) {
         beforeProperty.type = RLMPropertyTypeInt;
     } secondSchemaTransform:nil];
 }
 
 - (void)testMigrationRenamePropertyObjectTypeMismatch {
     RLMObjectSchema *objectSchema = [RLMObjectSchema schemaForObjectClass:MigrationLinkObject.class];
-    RLMObjectSchema *migrationObjectSchema = [RLMObjectSchema schemaForObjectClass:MigrationObject.class];
+    RLMObjectSchema *migrationObjectSchema = [RLMObjectSchema schemaForObjectClass:MigrationTestObject.class];
     NSArray *afterProperties = objectSchema.properties;
     NSMutableArray *beforeProperties = [NSMutableArray arrayWithCapacity:2];
     for (RLMProperty *property in afterProperties) {
@@ -1473,11 +1837,17 @@ RLM_ARRAY_TYPE(MigrationObject);
 
     objectSchema.properties = afterProperties;
 
-    [self assertPropertyRenameError:@"Old property 'before_object' of type '<MigrationLinkObject>' cannot be renamed to property 'object' of type '<MigrationObject>'."
-                      objectSchemas:@[objectSchema, migrationObjectSchema] className:MigrationLinkObject.className oldName:[beforeProperties[0] name] newName:[afterProperties[0] name]];
+    [self assertPropertyRenameError:@"Cannot rename property 'MigrationLinkObject.before_object' to 'object' because it would change from type '<MigrationLinkObject>' to '<MigrationTestObject>'."
+                      objectSchemas:@[objectSchema, migrationObjectSchema]
+                          className:MigrationLinkObject.className
+                            oldName:[beforeProperties[0] name]
+                            newName:[afterProperties[0] name]];
 
-    [self assertPropertyRenameError:@"Old property 'before_array' of type 'array<MigrationLinkObject>' cannot be renamed to property 'array' of type 'array<MigrationObject>'."
-                      objectSchemas:@[objectSchema, migrationObjectSchema] className:MigrationLinkObject.className oldName:[beforeProperties[1] name] newName:[afterProperties[1] name]];
+    [self assertPropertyRenameError:@"Cannot rename property 'MigrationLinkObject.before_array' to 'array' because it would change from type 'array<MigrationLinkObject>' to 'array<MigrationTestObject>'."
+                      objectSchemas:@[objectSchema, migrationObjectSchema]
+                          className:MigrationLinkObject.className
+                            oldName:[beforeProperties[1] name]
+                            newName:[afterProperties[1] name]];
 }
 
 - (void)testMigrationRenameMissingPropertiesAndClasses {
@@ -1488,21 +1858,26 @@ RLM_ARRAY_TYPE(MigrationObject);
     }];
 
     // Missing Old Property
-    [self assertPropertyRenameError:@"Old property 'nonExistentProperty1' is missing from the Realm file so it cannot be renamed to 'nonExistentProperty2'."
-                      objectSchemas:@[objectSchema] className:StringObject.className oldName:@"nonExistentProperty1" newName:@"nonExistentProperty2"];
+    [self assertPropertyRenameError:@"Cannot rename property 'StringObject.nonExistentProperty1' because it does not exist."
+                      objectSchemas:@[objectSchema] className:StringObject.className
+                            oldName:@"nonExistentProperty1" newName:@"nonExistentProperty2"];
 
     // Missing New Property
-    [self assertPropertyRenameError:@"Renamed property 'nonExistentProperty' is not in the latest model."
-                      objectSchemas:@[objectSchema] className:StringObject.className oldName:@"stringCol" newName:@"nonExistentProperty"];
+    RLMObjectSchema *renamedProperty = [objectSchema copy];
+    renamedProperty.properties[0].name = @"stringCol2";
+    [self assertPropertyRenameError:@"Renamed property 'StringObject.nonExistentProperty' does not exist."
+                      objectSchemas:@[renamedProperty] className:StringObject.className
+                            oldName:@"stringCol" newName:@"nonExistentProperty"];
 
     // Removed Class
-    [self assertPropertyRenameError:@"Cannot rename properties on type 'StringObject' because it is missing from the specified schema."
-                      objectSchemas:@[[RLMObjectSchema schemaForObjectClass:IntObject.class]] className:StringObject.className oldName:@"stringCol" newName:@"stringCol2"];
+    [self assertPropertyRenameError:@"Cannot rename properties for type 'StringObject' because it has been removed from the Realm."
+                      objectSchemas:@[[RLMObjectSchema schemaForObjectClass:IntObject.class]]
+                          className:StringObject.className oldName:@"stringCol" newName:@"stringCol2"];
 
     // Without Removing Old Property
     RLMProperty *secondProperty = [objectSchema.properties.firstObject copyWithNewName:@"stringCol2"];
     objectSchema.properties = [objectSchema.properties arrayByAddingObject:secondProperty];
-    [self assertPropertyRenameError:@"Old property 'stringCol' cannot be renamed to 'stringCol2' because the old property is still present in the specified schema."
+    [self assertPropertyRenameError:@"Cannot rename property 'StringObject.stringCol' to 'stringCol2' because the source property still exists."
                       objectSchemas:@[objectSchema] className:StringObject.className oldName:@"stringCol" newName:@"stringCol2"];
 }
 
