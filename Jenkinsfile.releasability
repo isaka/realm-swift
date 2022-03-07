@@ -1,4 +1,4 @@
-xcodeVersions = ['12.4', '12.5.1', '13.0', '13.1', '13.2.1']
+xcodeVersions = ['12.4', '12.5.1', '13.1', '13.2.1', '13.3']
 platforms = ['osx', 'ios', 'watchos', 'tvos', 'catalyst']
 carthagePlatforms = ['osx', 'ios', 'watchos', 'tvos']
 platformNames = ['osx': 'macOS', 'ios': 'iOS', 'watchos': 'watchOS', 'tvos': 'tvOS', 'catalyst': 'Catalyst']
@@ -125,6 +125,7 @@ def doBuild() {
           export REALM_XCODE_VERSION=${carthageXcodeVersion}
           . ./scripts/swift-version.sh
           set_xcode_and_swift_versions
+          export REALM_CARTHAGE_ARM_DISABLED='YES'
 
           # Carthage scans every xcodeproj in the directory looking for
           # targets. This can be very slow and even spuriously time out, so
