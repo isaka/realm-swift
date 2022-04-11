@@ -34,6 +34,8 @@
 #import "RLMRealmConfiguration_Private.hpp"
 #import "RLMRealmUtil.hpp"
 #import "RLMSchema_Private.hpp"
+#import "RLMSyncConfiguration.h"
+#import "RLMSyncConfiguration_Private.hpp"
 #import "RLMSet_Private.hpp"
 #import "RLMThreadSafeReference_Private.hpp"
 #import "RLMUpdateChecker.hpp"
@@ -322,11 +324,16 @@ static id RLMAutorelease(__unsafe_unretained id value) {
     return value ? (__bridge id)CFAutorelease((__bridge_retained CFTypeRef)value) : nil;
 }
 
-+ (instancetype)realmWithSharedRealm:(SharedRealm)sharedRealm schema:(RLMSchema *)schema {
++ (instancetype)realmWithSharedRealm:(SharedRealm)sharedRealm
+                              schema:(RLMSchema *)schema
+                             dynamic:(bool)dynamic {
     RLMRealm *realm = [[RLMRealm alloc] initPrivate];
     realm->_realm = sharedRealm;
-    realm->_dynamic = YES;
+    realm->_dynamic = dynamic;
     realm->_schema = schema;
+    if (!dynamic) {
+        realm->_realm->set_schema_subset(schema.objectStoreCopy);
+    }
     realm->_info = RLMSchemaInfo(realm);
     return RLMAutorelease(realm);
 }
@@ -469,6 +476,11 @@ REALM_NOINLINE void RLMRealmTranslateException(NSError **error) {
     configuration = [configuration copy];
     Realm::Config& config = configuration.config;
 
+    // Pass the configuration so client reset callbacks can access schema and path information.
+    if (configuration.syncConfiguration.beforeClientReset || configuration.syncConfiguration.afterClientReset) {
+        RLMSetConfigInfoForClientResetCallbacks(*config.sync_config, configuration);
+    }
+
     RLMRealm *realm = [[self alloc] initPrivate];
     realm->_dynamic = dynamic;
 
@@ -525,13 +537,17 @@ REALM_NOINLINE void RLMRealmTranslateException(NSError **error) {
         if (migrationBlock && configuration.schemaVersion > 0) {
             migrationFunction = [=](SharedRealm old_realm, SharedRealm realm, Schema& mutableSchema) {
                 RLMSchema *oldSchema = [RLMSchema dynamicSchemaFromObjectStoreSchema:old_realm->schema()];
-                RLMRealm *oldRealm = [RLMRealm realmWithSharedRealm:old_realm schema:oldSchema];
+                RLMRealm *oldRealm = [RLMRealm realmWithSharedRealm:old_realm
+                                                             schema:oldSchema
+                                                            dynamic:true];
 
                 // The destination RLMRealm can't just use the schema from the
                 // SharedRealm because it doesn't have information about whether or
                 // not a class was defined in Swift, which effects how new objects
                 // are created
-                RLMRealm *newRealm = [RLMRealm realmWithSharedRealm:realm schema:schema.copy];
+                RLMRealm *newRealm = [RLMRealm realmWithSharedRealm:realm
+                                                             schema:schema.copy
+                                                            dynamic:true];
 
                 [[[RLMMigration alloc] initWithRealm:newRealm oldRealm:oldRealm schema:mutableSchema] execute:migrationBlock];
 
@@ -724,6 +740,94 @@ REALM_NOINLINE void RLMRealmTranslateException(NSError **error) {
     catch (std::exception &ex) {
         @throw RLMException(ex);
     }
+}
+
+- (BOOL)isPerformingAsynchronousWriteOperations {
+    return _realm->is_in_async_transaction();
+}
+
+- (RLMAsyncTransactionId)beginAsyncWriteTransaction:(void(^)())block {
+    try {
+        return _realm->async_begin_transaction(block);
+    }
+    catch (std::exception &ex) {
+        @throw RLMException(ex);
+    }
+}
+
+- (RLMAsyncTransactionId)commitAsyncWriteTransaction {
+    try {
+        return _realm->async_commit_transaction();
+    }
+    catch (...) {
+        RLMRealmTranslateException(nil);
+        return 0;
+    }
+}
+
+- (RLMAsyncTransactionId)commitAsyncWriteTransaction:(void(^)(NSError *))completionBlock {
+    return [self commitAsyncWriteTransaction:completionBlock isGroupingAllowed:false];
+}
+
+- (RLMAsyncTransactionId)commitAsyncWriteTransaction:(nullable void(^)(NSError *))completionBlock isGroupingAllowed:(BOOL)isGroupingAllowed {
+    try {
+        auto completion = [=](std::exception_ptr err) {
+            @autoreleasepool {
+                if (!completionBlock) {
+                    std::rethrow_exception(err);
+                    return;
+                }
+                if (err) {
+                    try {
+                        std::rethrow_exception(err);
+                    }
+                    catch (...) {
+                        NSError *error;
+                        RLMRealmTranslateException(&error);
+                        completionBlock(error);
+                    }
+                } else {
+                    completionBlock(nil);
+                }
+            }
+        };
+
+        if (completionBlock) {
+            return _realm->async_commit_transaction(completion, isGroupingAllowed);
+        }
+        return _realm->async_commit_transaction(nullptr, isGroupingAllowed);
+    }
+    catch (...) {
+        RLMRealmTranslateException(nil);
+        return 0;
+    }
+}
+
+- (void)cancelAsyncTransaction:(RLMAsyncTransactionId)asyncTransactionId {
+    try {
+        _realm->async_cancel_transaction(asyncTransactionId);
+    }
+    catch (std::exception &ex) {
+        @throw RLMException(ex);
+    }
+}
+
+- (RLMAsyncTransactionId)asyncTransactionWithBlock:(void(^)())block onComplete:(nullable void(^)(NSError *))completionBlock {
+    return [self beginAsyncWriteTransaction:^{
+        block();
+        if (_realm->is_in_transaction()) {
+            [self commitAsyncWriteTransaction:completionBlock];
+        }
+    }];
+}
+
+- (RLMAsyncTransactionId)asyncTransactionWithBlock:(void(^)())block {
+    return [self beginAsyncWriteTransaction:^{
+        block();
+        if (_realm->is_in_transaction()) {
+            [self commitAsyncWriteTransaction];
+        }
+    }];
 }
 
 - (void)invalidate {

@@ -3,8 +3,8 @@
 import PackageDescription
 import Foundation
 
-let coreVersionStr = "11.12.0"
-let cocoaVersionStr = "10.24.2"
+let coreVersionStr = "11.13.0"
+let cocoaVersionStr = "10.25.0"
 
 let coreVersionPieces = coreVersionStr.split(separator: ".")
 let coreVersionExtra = coreVersionPieces[2].split(separator: "-")
@@ -27,6 +27,7 @@ let cxxSettings: [CXXSetting] = [
     .define("REALM_VERSION_PATCH", to: String(coreVersionExtra[0])),
     .define("REALM_VERSION_EXTRA", to: "\"\(coreVersionExtra.count > 1 ? String(coreVersionExtra[1]) : "")\""),
     .define("REALM_VERSION_STRING", to: "\"\(coreVersionStr)\""),
+    .define("REALM_ASYNC_WRITES", .when(configuration: .debug)),
 ]
 let testCxxSettings: [CXXSetting] = cxxSettings + [
     // Command-line `swift build` resolves header search paths
@@ -47,9 +48,11 @@ func hostMachineArch() -> String {
 }
 let testSwiftSettings: [SwiftSetting]?
 #if swift(>=5.4) && !swift(>=5.5)
-testSwiftSettings = [.unsafeFlags(["-target", "\(hostMachineArch())-apple-macosx11.0"])]
+testSwiftSettings = [.unsafeFlags(["-target", "\(hostMachineArch())-apple-macosx11.0"]),
+                     .define("REALM_ASYNC_WRITES", .when(configuration: .debug)),
+]
 #else
-testSwiftSettings = nil
+testSwiftSettings = [.define("REALM_ASYNC_WRITES", .when(configuration: .debug))]
 #endif
 
 // SPM requires all targets to explicitly include or exclude every file, which
