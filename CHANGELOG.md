@@ -1,6 +1,90 @@
 x.y.z Release notes (yyyy-MM-dd)
 =============================================================
 ### Enhancements
+* None.
+
+### Fixed
+* <How to hit and notice issue? what was the impact?> ([#????](https://github.com/realm/realm-swift/issues/????), since v?.?.?)
+* None.
+
+<!-- ### Breaking Changes - ONLY INCLUDE FOR NEW MAJOR version -->
+
+### Compatibility
+* Realm Studio: 11.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 13.4.
+* CocoaPods: 1.10 or later.
+* Xcode: 13.1-13.4.
+
+### Internal
+* Upgraded realm-core from ? to ?
+
+10.27.0 Release notes (2022-05-26)
+=============================================================
+
+### Enhancements
+
+* `@AsyncOpen`/`@AutoOpen` property wrappers can be used with flexible sync.
+
+### Fixed
+
+* When installing via SPM, debug builds could potentially hit an assertion
+  failure during flexible sync bootstrapping. ([Core #5527](https://github.com/realm/realm-core/pull/5527))
+* Flexible sync now only applies bootstrap data if the entire bootstrap is
+  received. Previously orphaned objects could result from the read snapshot on
+  the server changing. ([Core #5331](https://github.com/realm/realm-core/pull/5331))
+* Partially fix a performance regression in write performance introduced in
+  v10.21.1. v10.21.1 fixed a case where a kernel panic or device's battery
+  dying at the wrong point in a write transaction could potentially result in a
+  corrected Realm file, but at the cost of a severe performance hit. This
+  version adjusts how file synchronization is done to provide the same safety
+  at a much smaller performance hit. ([#7740](https://github.com/realm/realm-swift/issues/7740)).
+
+### Compatibility
+
+* Realm Studio: 11.0.0 or later (but see note below).
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 13.4.
+* CocoaPods: 1.10 or later.
+* Xcode: 13.1-13.4.
+
+### Internal
+
+* Upgraded realm-core from 11.17.0 to 12.0.0.
+* Bump the version number for the lockfile used for interprocess
+  synchronization. This has no effect on persistent data, but means that
+  versions of Realm which use pre-12.0.0 realm-core cannot open Realm files at
+  the same time as they are opened by this version. Notably this includes Realm
+  Studio, and v11.1.2 (the latest at the time of this release) cannot open
+  Realm files which are simultaneously open in the simulator.
+
+10.26.0 Release notes (2022-05-19)
+=============================================================
+
+Xcode 13.1 is now the minimum supported version of Xcode, as Apple no longer
+allows submitting to the app store with Xcode 12.
+
+### Enhancements
+
+* Add Xcode 13.4 binaries to the release package.
+* Add Swift API for asynchronous transactions
+```swift
+    try? realm.writeAsync {
+        realm.create(SwiftStringObject.self, value: ["string"])
+    } onComplete: { error in
+        // optional handling on write complete
+    }
+
+    try? realm.beginAsyncWrite {
+        realm.create(SwiftStringObject.self, value: ["string"])
+        realm.commitAsyncWrite()
+    }
+
+    let asyncTransactionId = try? realm.beginAsyncWrite {
+        // ...
+    }
+    try! realm.cancelAsyncWrite(asyncTransactionId)
+```
 * Add Obj-C API for asynchronous transactions
 ```
    [realm asyncTransactionWithBlock:^{
@@ -19,14 +103,95 @@ x.y.z Release notes (yyyy-MM-dd)
     }];
     [realm cancelAsyncTransaction:asyncTransactionId];
 ```
+* Improve performance of opening a Realm with `objectClasses`/`objectTypes` set
+  in the configuration.
+* Implement the Realm event recording API for reporting reads and writes on a
+  Realm file to Atlas.
 
 ### Fixed
-* <How to hit and notice issue? what was the impact?> ([#????](https://github.com/realm/realm-swift/issues/????), since v?.?.?)
-* None.
 
-<!-- ### Breaking Changes - ONLY INCLUDE FOR NEW MAJOR version -->
+* Lower minimum OS version for `async` login and FunctionCallables to match the
+  rest of the `async` functions. ([#7791]https://github.com/realm/realm-swift/issues/7791)
+* Consuming a RealmSwift XCFramework with library evolution enabled would give the error
+  `'Failed to build module 'RealmSwift'; this SDK is not supported by the compiler'`
+  when the XCFramework was built with an older XCode version and is
+  then consumed with a later version. ([#7313](https://github.com/realm/realm-swift/issues/7313), since v3.18.0)
+* A data race would occur when opening a synchronized Realm with the client
+  reset mode set to `discardLocal` on one thread at the same time as a client
+  reset was being processed on another thread. This probably did not cause any
+  functional problems in practice and the broken timing window was very tight (since 10.25.0).
+* If an async open of a Realm triggered a client reset, the callbacks for
+  `discardLocal` could theoretically fail to be called due to a race condition.
+  The timing for this was probably not possible to hit in practice (since 10.25.0).
+* Calling `[RLMRealm freeze]`/`Realm.freeze` on a Realm which had been created from `writeCopy`
+  would not produce a frozen Realm. ([#7697](https://github.com/realm/realm-swift/issues/7697), since v5.0.0)
+* Using the dynamic subscript API on unmanaged objects before first opening a
+  Realm or if `objectTypes` was set when opening a Realm would throw an
+  exception ([#7786](https://github.com/realm/realm-swift/issues/7786)).
+* The sync client may have sent a corrupted upload cursor leading to a fatal
+  error from the server due to an uninitialized variable.
+  ([#5460](https://github.com/realm/realm-core/pull/5460), since v10.25.1)
+* Flexible sync would not correctly resume syncing if a bootstrap was interrupted
+  ([#5466](https://github.com/realm/realm-core/pull/5466), since v10.21.1).
 
 ### Compatibility
+
+* Realm Studio: 11.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 13.4.
+* CocoaPods: 1.10 or later.
+* Xcode: 13.1-13.4.
+
+### Internal
+
+* Upgraded realm-core from v11.15.0 to v11.17.0
+
+10.25.2 Release notes (2022-04-27)
+=============================================================
+
+### Enhancements
+
+* Replace Xcode 13.3 binaries with 13.3.1 binaries.
+
+### Fixed
+
+* `List<AnyRealmValue>` would contain an invalidated object instead of null when
+  the object linked to was deleted by a difference sync client
+  ([Core #5215](https://github.com/realm/realm-core/pull/5215), since v10.8.0).
+* Adding an object to a Set, deleting the parent object of the Set, and then
+  deleting the object which was added to the Set would crash
+  ([Core #5387](https://github.com/realm/realm-core/issues/5387), since v10.8.0).
+* Synchronized Realm files which were first created using v10.0.0-beta.3 would
+  be redownloaded instead of using the existing file, possibly resulting in the
+  loss of any unsynchronized data in those files (since v10.20.0).
+
+### Compatibility
+
+* Realm Studio: 11.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 13.3.1.
+* CocoaPods: 1.10 or later.
+* Xcode: 12.4-13.3.1.
+
+### Internal
+
+* Upgraded realm-core from v11.14.0 to v11.15.0
+
+10.25.1 Release notes (2022-04-11)
+=============================================================
+
+### Fixed
+
+* Fixed various memory corruption bugs when encryption is used caused by not
+  locking a mutex when needed.
+  ([#7640](https://github.com/realm/realm-swift/issues/7640), [#7659](https://github.com/realm/realm-swift/issues/7659), since v10.21.1)
+* Changeset upload batching did not calculate the accumulated size correctly,
+  resulting in “error reading body failed to read: read limited at 16777217
+  bytes” errors from the server when writing large amounts of data
+  ([Core #5373](https://github.com/realm/realm-core/pull/5373), since 11.13.0).
+
+### Compatibility
+
 * Realm Studio: 11.0.0 or later.
 * APIs are backwards compatible with all previous releases in the 10.x.y series.
 * Carthage release for Swift is built with Xcode 13.3.
@@ -34,7 +199,8 @@ x.y.z Release notes (yyyy-MM-dd)
 * Xcode: 12.4-13.3.
 
 ### Internal
-* Upgraded realm-core from ? to ?
+
+* Upgraded realm-core from v11.13.0 to v11.14.0.
 
 10.25.0 Release notes (2022-03-29)
 =============================================================
