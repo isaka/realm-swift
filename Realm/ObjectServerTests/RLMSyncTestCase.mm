@@ -30,6 +30,7 @@
 #import "RLMUtil.hpp"
 #import "RLMApp_Private.hpp"
 #import "RLMChildProcessEnvironment.h"
+#import "RLMRealmUtil.hpp"
 
 #import <realm/object-store/sync/sync_manager.hpp>
 #import <realm/object-store/sync/sync_session.hpp>
@@ -706,7 +707,7 @@ static NSURL *syncDirectoryForChildProcess() {
     XCTAssertNotNil(subs);
 
     XCTestExpectation *ex = [self expectationWithDescription:@"state change complete"];
-    [subs write:^{
+    [subs update:^{
         [subs addSubscriptionWithClassName:Person.className
                           subscriptionName:@"person_all"
                                      where:@"TRUEPREDICATE"];
@@ -732,7 +733,7 @@ static NSURL *syncDirectoryForChildProcess() {
     XCTAssertNotNil(subs);
 
     XCTestExpectation *ex = [self expectationWithDescription:@"state changes"];
-    [subs write:^{
+    [subs update:^{
         block(subs);
     } onComplete:^(NSError* error) {
         if (error == nil) {
@@ -744,6 +745,10 @@ static NSURL *syncDirectoryForChildProcess() {
     XCTAssertNotNil(subs);
     [self waitForExpectationsWithTimeout:20.0 handler:nil];
     [self waitForDownloadsForRealm:realm];
+}
+
+- (void)clearCachedRealms {
+    RLMClearRealmCache();
 }
 
 @end

@@ -256,7 +256,7 @@ build_docs() {
       "${objc}" \
       --clean \
       --author Realm \
-      --author_url https://realm.io \
+      --author_url https://docs.mongodb.com/realm-sdks \
       --github_url https://github.com/realm/realm-swift \
       --github-file-prefix "https://github.com/realm/realm-swift/tree/v${version}" \
       --module-version "${version}" \
@@ -1202,7 +1202,7 @@ case "$COMMAND" in
 <plist version="1.0">
 <dict>
     <key>URL</key>
-    <string>https://realm.io/docs/${LANG}/${version}</string>
+    <string>https://www.mongodb.com/docs/realm-sdks/${LANG}/${version}</string>
 </dict>
 </plist>
 EOF
@@ -1293,9 +1293,9 @@ x.y.z Release notes (yyyy-MM-dd)
 ### Compatibility
 * Realm Studio: 11.0.0 or later.
 * APIs are backwards compatible with all previous releases in the 10.x.y series.
-* Carthage release for Swift is built with Xcode 13.4.
+* Carthage release for Swift is built with Xcode 13.4.1.
 * CocoaPods: 1.10 or later.
-* Xcode: 13.1-13.4.
+* Xcode: 13.1-14 beta 1.
 
 ### Internal
 * Upgraded realm-core from ? to ?

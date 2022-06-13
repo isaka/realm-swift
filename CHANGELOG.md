@@ -12,12 +12,80 @@ x.y.z Release notes (yyyy-MM-dd)
 ### Compatibility
 * Realm Studio: 11.0.0 or later.
 * APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 13.4.1.
+* CocoaPods: 1.10 or later.
+* Xcode: 13.1-14 beta 1.
+
+### Internal
+* Upgraded realm-core from ? to ?
+
+10.28.1 Release notes (2022-06-10)
+=============================================================
+
+### Enhancements
+
+* Add support for Xcode 14. When building with Xcode 14, the minimum deployment
+  target is now iOS 11.
+
+### Compatibility
+
+* Realm Studio: 11.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 13.4.1.
+* CocoaPods: 1.10 or later.
+* Xcode: 13.1-14 beta 1.
+
+10.28.0 Release notes (2022-06-03)
+=============================================================
+
+### Enhancements
+
+* Replace mentions of 'MongoDB Realm' with 'Atlas App Services' in the documentation and update appropriate links to documentation.
+* Allow adding a subscription querying for all documents of a type in swift for flexible sync.
+```
+   try await subscriptions.update {
+      subscriptions.append(QuerySubscription<SwiftPerson>(name: "all_people"))
+   }
+```
+* Add Combine API support for flexible sync beta.
+* Add an `initialSubscriptions` parameter when retrieving the flexible sync configuration from a user, 
+  which allows to specify a subscription update block, to bootstrap a set of flexible sync subscriptions 
+  when the Realm is first opened.
+  There is an additional optional parameter flag `rerunOnOpen`, which allows to run this initial 
+  subscriptions on every app startup.
+
+```swift
+    let config = user.flexibleSyncConfiguration(initialSubscriptions: { subs in
+        subs.append(QuerySubscription<SwiftPerson>(name: "people_10") {
+            $0.age > 10
+        })
+    }, rerunOnOpen: true)
+    let realm = try Realm(configuration: config)
+```
+* The sync client error handler will report an error, with detailed info about which object caused it, when writing an object to a flexible sync Realm outside of any query subscription. ([#5528](https://github.com/realm/realm-core/pull/5528))
+* Adding an object to a flexible sync Realm for a type that is not within a query subscription will now throw an exception. ([#5488](https://github.com/realm/realm-core/pull/5488)).
+
+### Fixed
+
+* Flexible Sync query subscriptions will correctly complete when data is synced to the local Realm. ([#5553](https://github.com/realm/realm-core/pull/5553), since v12.0.0)
+
+### Breaking Changes
+
+* Rename `SyncSubscriptionSet.write` to `SyncSubscriptionSet.update` to avoid confusion with `Realm.write`.
+* Rename `SyncSubscription.update` to `SyncSubscription.updateQuery` to avoid confusion with `SyncSubscriptionSet.update`.
+* Rename `RLMSyncSubscriptionSet.write` to `RLMSyncSubscriptionSet.update` to align it with swift API.
+
+### Compatibility
+
+* Realm Studio: 11.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
 * Carthage release for Swift is built with Xcode 13.4.
 * CocoaPods: 1.10 or later.
 * Xcode: 13.1-13.4.
 
 ### Internal
-* Upgraded realm-core from ? to ?
+
+* Upgraded realm-core from 12.0.0 to 12.1.0.
 
 10.27.0 Release notes (2022-05-26)
 =============================================================

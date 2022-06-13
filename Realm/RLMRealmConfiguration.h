@@ -35,6 +35,12 @@ NS_ASSUME_NONNULL_BEGIN
 typedef BOOL (^RLMShouldCompactOnLaunchBlock)(NSUInteger totalBytes, NSUInteger bytesUsed);
 
 /**
+ A block which receives a subscription set instance, that can be used to add an initial set of subscriptions which will be executed
+ when the Realm is first opened.
+ */
+typedef void(^RLMFlexibleSyncInitialSubscriptionsBlock)(RLMSyncSubscriptionSet * _Nonnull subscriptions);
+
+/**
  An `RLMRealmConfiguration` instance describes the different options used to
  create an instance of a Realm.
 
@@ -176,7 +182,7 @@ typedef BOOL (^RLMShouldCompactOnLaunchBlock)(NSUInteger totalBytes, NSUInteger 
 
 /**
  A configuration object representing configuration state for Realms intended
- to sync with MongoDB Realm.
+ to sync with Atlas Device Sync.
 
  This property is mutually exclusive with both `inMemoryIdentifier` and `fileURL`;
  setting any one of the three properties will automatically nil out the other two.
