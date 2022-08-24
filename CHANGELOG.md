@@ -4,7 +4,8 @@ x.y.z Release notes (yyyy-MM-dd)
 * None.
 
 ### Fixed
-* Add missing `initialSubscription` and `rerunOnOpen` to copyWithZone method on `RLMRealmConfiguration`. This resulted in incorrect values when using `RLMRealmConfiguration.defaultConfiguration`.
+* <How to hit and notice issue? what was the impact?> ([#????](https://github.com/realm/realm-swift/issues/????), since v?.?.?)
+* None.
 
 <!-- ### Breaking Changes - ONLY INCLUDE FOR NEW MAJOR version -->
 
@@ -17,6 +18,119 @@ x.y.z Release notes (yyyy-MM-dd)
 
 ### Internal
 * Upgraded realm-core from ? to ?
+
+10.28.6 Release notes (2022-08-19)
+=============================================================
+
+### Fixed
+* Fixed an issue where having realm-swift as SPM sub-target dependency leads to missing symbols error during iOS archiving ([Core #7645](https://github.com/realm/realm-core/pull/7645)).
+
+### Compatibility
+* Realm Studio: 11.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 13.4.1.
+* CocoaPods: 1.10 or later.
+* Xcode: 13.1-14 beta 5.
+
+### Internal
+
+* Upgraded realm-core from 12.5.0 to 12.5.1
+
+10.28.5 Release notes (2022-08-09)
+=============================================================
+
+### Enhancements
+
+* Improve performance of accessing `SubscriptionSet` properties when no writes
+  have been made to the Realm since the last access.
+
+### Fixed
+
+* A use-after-free could occur if a Realm with audit events enabled was
+  destroyed while processing an upload completion for the events Realm on a
+  different thread. ([Core PR #5714](https://github.com/realm/realm-core/pull/5714))
+* Opening a read-only synchronized Realm for the first time via asyncOpen did
+  not set the schema version, which could lead to `m_schema_version !=
+  ObjectStore::NotVersioned` assertion failures later on.
+
+### Compatibility
+
+* Realm Studio: 11.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 13.4.1.
+* CocoaPods: 1.10 or later.
+* Xcode: 13.1-14 beta 4.
+
+### Internal
+
+* Upgraded realm-core from 12.4.0 to 12.5.0
+
+10.28.4 Release notes (2022-08-03)
+=============================================================
+
+### Enhancements
+
+* Add support for building arm64 watchOS when installing Realm via CocoaPods.
+* Reduce the amount of virtual address space used
+  ([Core #5645](https://github.com/realm/realm-core/pull/5645)).
+
+### Fixed
+
+* Fix some warnings when building with Xcode 14
+  ([Core #5577](https://github.com/realm/realm-core/pull/5577)).
+* Fix compilation failures on watchOS platforms which do not support thread-local storage.
+  ([#7694](https://github.com/realm/realm-swift/issues/7694), [#7695](https://github.com/realm/realm-swift/issues/7695) since v10.21.1)
+* Fix a data race when committing a transaction while multiple threads are
+  waiting to begin write transactions. This appears to not have caused any
+  functional problems.
+* Fix a data race when writing audit events which could occur if the sync
+  client thread was busy with other work when the event Realm was opened.
+* Fix some cases of running out of virtual address space (seen/reported as mmap
+  failures) ([Core #5645](https://github.com/realm/realm-core/pull/5645)).
+* Audit event scopes containing only write events and no read events would
+  occasionally throw a `BadVersion` exception when a write transaction was
+  committed (since v10.26.0).
+* The client reset callbacks for the DiscardLocal mode would be passed invalid
+  Realm instances if the callback was invoked at a point where the Realm was
+  not otherwise open. ([Core #5654](https://github.com/realm/realm-core/pull/5654), since the introduction of DiscardLocal reset mode in v10.25.0)
+
+### Compatibility
+
+* Realm Studio: 11.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 13.4.1.
+* CocoaPods: 1.10 or later.
+* Xcode: 13.1-14 beta 4.
+
+### Internal
+
+* Upgraded realm-core from 12.3.0 to 12.4.0.
+
+10.28.3 Release notes (2022-07-27)
+=============================================================
+
+### Enhancements
+
+* Greatly improve the performance of obtaining cached Realm instances in Swift
+  when using a sync configuration.
+
+### Fixed
+
+* Add missing `initialSubscription` and `rerunOnOpen` to copyWithZone method on
+  `RLMRealmConfiguration`. This resulted in incorrect values when using
+  `RLMRealmConfiguration.defaultConfiguration`.
+* The sync error handler did not hold a strong reference to the sync session
+  while dispatching the error from the worker thread to the main thread,
+  resulting in the session passed to the error handler being invalid if there
+  were no other remaining strong references elsewhere.
+
+### Compatibility
+
+* Realm Studio: 11.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 13.4.1.
+* CocoaPods: 1.10 or later.
+* Xcode: 13.1-14 beta 3.
 
 10.28.2 Release notes (2022-06-30)
 =============================================================
