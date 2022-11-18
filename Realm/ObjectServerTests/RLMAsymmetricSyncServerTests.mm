@@ -202,13 +202,17 @@ RLM_COLLECTION_TYPE(PersonAsymmetric);
     __block unsigned long count = 0;
     NSDate *waitStart = [NSDate date];
     while (count < expectedCount && ([waitStart timeIntervalSinceNow] > -600.0)) {
+        auto ex = [self expectationWithDescription:@""];
         [collection countWhere:@{}
                     completion:^(NSInteger c, NSError *error) {
             XCTAssertNil(error);
             count = c;
-
+            [ex fulfill];
         }];
-        sleep(5);
+        [self waitForExpectations:@[ex] timeout:5.0];
+        if (count < expectedCount) {
+            sleep(5);
+        }
     }
     XCTAssertEqual(count, expectedCount);
 }
@@ -259,22 +263,23 @@ RLM_COLLECTION_TYPE(PersonAsymmetric);
 
 - (void)testOpenLocalRealmWithAsymmetricObjectError {
     RLMRealmConfiguration *configuration = [RLMRealmConfiguration defaultConfiguration];
-    configuration.objectClasses =  @[PersonAsymmetric.self];
+    configuration.objectClasses = @[PersonAsymmetric.self];
     NSError *error;
     RLMRealm *realm = [RLMRealm realmWithConfiguration:configuration error:&error];
     XCTAssertNil(realm);
-    XCTAssertNotNil(error);
+    RLMValidateErrorContains(error, RLMErrorDomain, RLMErrorFail,
+                             @"Asymmetric table 'PersonAsymmetric' not allowed in a local Realm");
 }
 
-// FIXME: Enable this test when this is implemented on core. Core should validate if the schema includes an asymmetric table for a PBS configuration and throw an error.
-- (void)fixme_testOpenPBSConfigurationWithAsymmetricObjectError {
+- (void)testOpenPBSConfigurationWithAsymmetricObjectError {
     RLMUser *user = [self userForTest:_cmd];
     RLMRealmConfiguration *configuration = [user configurationWithPartitionValue:NSStringFromSelector(_cmd)];
     configuration.objectClasses = @[PersonAsymmetric.self];
     NSError *error;
     RLMRealm *realm = [RLMRealm realmWithConfiguration:configuration error:&error];
     XCTAssertNil(realm);
-    XCTAssertNotNil(error);
+    RLMValidateErrorContains(error, RLMErrorDomain, RLMErrorFail,
+                             @"Asymmetric table 'PersonAsymmetric' not allowed in partition based sync");
 }
 
 - (void)testCreateAsymmetricObjects {

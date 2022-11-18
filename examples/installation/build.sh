@@ -52,13 +52,16 @@ COMMAND="$1"
 export EXPANDED_CODE_SIGN_IDENTITY=''
 
 download_zip_if_needed() {
-    LANG="$1"
-    local DIRECTORY=realm-$LANG-latest
-    if [ ! -d "$DIRECTORY" ]; then
-        curl -o "$DIRECTORY".zip -L https://static.realm.io/downloads/"$LANG"/latest
-        unzip "$DIRECTORY".zip
-        rm "$DIRECTORY".zip
-        mv realm-"$LANG"-* "$DIRECTORY"
+    local lang="$1"
+    local directory="realm-$lang-latest"
+    local version
+    version=$(curl --silent https://static.realm.io/update/cocoa)
+
+    if [ ! -d "$directory" ]; then
+        curl -o "$directory".zip -L "https://static.realm.io/downloads/$lang/realm-$lang-$version.zip"
+        unzip "$directory".zip
+        rm "$directory".zip
+        mv realm-"$lang"-* "$directory"
     fi
 }
 
@@ -97,11 +100,11 @@ xctest() {
                 echo "github \"realm/realm-swift\" \"${sha:-master}\"" > Cartfile
             fi
             if [[ $PLATFORM == ios ]]; then
-                carthage update --platform iOS
+                carthage update --use-xcframeworks --platform iOS
             elif [[ $PLATFORM == osx ]]; then
-                carthage update --platform Mac
+                carthage update --use-xcframeworks --platform Mac
             elif [[ $PLATFORM == watchos ]]; then
-                carthage update --platform watchOS
+                carthage update --use-xcframeworks --platform watchOS
             fi
         )
     elif [[ $NAME == SwiftPackageManager* ]]; then
@@ -121,7 +124,7 @@ xctest() {
     local destination=()
     if [[ $PLATFORM == ios ]]; then
         simulator_id="$(xcrun simctl list devices | grep -v unavailable | grep -m 1 -o '[0-9A-F\-]\{36\}')"
-        xcrun simctl boot "$simulator_id"
+        xcrun simctl boot "$simulator_id" || true
         destination=(-destination "id=$simulator_id")
     elif [[ $PLATFORM == watchos ]]; then
         destination=(-sdk watchsimulator)
@@ -197,7 +200,6 @@ case "$COMMAND" in
         ;;
 
     test-*-*-carthage)
-        export REALM_CARTHAGE_ARM_DISABLED='YES'
         xctest "$PLATFORM" "$LANGUAGE" CarthageExample
         ;;
 

@@ -128,13 +128,13 @@ private extension ObjectSchema {
         // First pass we only add the properties to the schema as we can't add
         // links until the targets of the links exist.
         let pk = primaryKeyProperty!
-        stitchProperties[pk.name] = pk.stitchRule(self)
+        stitchProperties[pk.columnName] = pk.stitchRule(self)
         for property in properties {
             if property.type != .object {
-                stitchProperties[property.name] = property.stitchRule(self)
+                stitchProperties[property.columnName] = property.stitchRule(self)
             } else if id != nil {
-                stitchProperties[property.name] = property.stitchRule(self)
-                relationships[property.name] = [
+                stitchProperties[property.columnName] = property.stitchRule(self)
+                relationships[property.columnName] = [
                     "ref": "#/relationship/mongodb1/test_data/\(property.objectClassName!)",
                     "foreign_key": "_id",
                     "is_list": property.isArray || property.isSet || property.isMap
@@ -148,7 +148,7 @@ private extension ObjectSchema {
                 "properties": stitchProperties,
                 // The server currently only supports non-optional collections
                 // but requires them to be marked as optional
-                "required": properties.compactMap { $0.isOptional || $0.type == .any || $0.isArray || $0.isMap || $0.isSet ? nil : $0.name },
+                "required": properties.compactMap { $0.isOptional || $0.type == .any || $0.isArray || $0.isMap || $0.isSet ? nil : $0.columnName },
                 "title": "\(className)"
             ],
             "metadata": [
@@ -293,8 +293,9 @@ class Admin {
                     result = $0
                     group.leave()
                 }
-                guard case .success = group.wait(timeout: .now() + 30) else {
-                    return .failure(URLError(.badServerResponse))
+                guard case .success = group.wait(timeout: .now() + 60) else {
+                    print("HTTP request timed out: \(httpMethod) \(self.url)")
+                    return .failure(URLError(.timedOut))
                 }
                 return result
             }
@@ -346,6 +347,10 @@ class Admin {
 
             func delete(on group: DispatchGroup, _ completionHandler: @escaping (Result<Any?, Error>) -> Void) {
                 request(on: group, httpMethod: "DELETE", completionHandler)
+            }
+
+            func delete() -> Result<Any?, Error> {
+                request(httpMethod: "DELETE")
             }
 
             func patch(on group: DispatchGroup, _ data: Any, _ completionHandler: @escaping (Result<Any?, Error>) -> Void) {
@@ -581,6 +586,7 @@ public class RealmServer: NSObject {
 
         serverProcess.environment = env
         // golang server needs a tmp directory
+
         try! FileManager.default.createDirectory(atPath: "\(tempDir.path)/tmp",
             withIntermediateDirectories: false, attributes: nil)
         serverProcess.launchPath = "\(binDir)/stitch_server"
@@ -754,12 +760,12 @@ public class RealmServer: NSObject {
         if case .pbs(let bsonType) = syncMode {
             syncTypes = objectsSchema.filter {
                 guard let pk = $0.primaryKeyProperty else { return false }
-                return pk.name == "_id"
+                return pk.columnName == "_id"
             }
             partitionKeyType = bsonType
         } else {
             syncTypes = objectsSchema.filter {
-                let validSyncClasses = ["Dog", "Person", "SwiftPerson", "SwiftTypesSyncObject", "PersonAsymmetric", "SwiftObjectAsymmetric", "HugeObjectAsymmetric"]
+                let validSyncClasses = ["Dog", "Person", "SwiftPerson", "SwiftTypesSyncObject", "PersonAsymmetric", "SwiftObjectAsymmetric", "HugeObjectAsymmetric", "SwiftCustomColumnObject", "SwiftCustomColumnAsymmetricObject"]
                 return validSyncClasses.contains($0.className)
             }
             partitionKeyType = nil
@@ -996,19 +1002,20 @@ public class RealmServer: NSObject {
         }
     }
 
-    public func syncEnabled(appServerId: String, syncServiceId: String) throws -> Bool {
+    public func isSyncEnabled(flexibleSync: Bool = false, appServerId: String, syncServiceId: String) throws -> Bool {
+        let configOption = flexibleSync ? "flexible_sync" : "sync"
         guard let session = session else {
             fatalError()
         }
         let app = session.apps[appServerId]
         let response = try app.services[syncServiceId].config.get().get() as? [String: Any]
-        guard let syncInfo = response?["sync"] as? [String: Any] else {
+        guard let syncInfo = response?[configOption] as? [String: Any] else {
             return false
         }
         return (syncInfo["state"] as? String == "enabled")
     }
 
-    public func devModeEnabled(appServerId: String, syncServiceId: String) throws -> Bool {
+    public func isDevModeEnabled(appServerId: String, syncServiceId: String) throws -> Bool {
         guard let session = session else {
             fatalError()
         }
@@ -1020,59 +1027,106 @@ public class RealmServer: NSObject {
         return option
     }
 
-    public func enableDevMode(appServerId: String, syncServiceId: String, syncServiceConfiguration: [String: Any], _ completion: @escaping (Result<Any?, Error>) -> Void) {
+    public func enableDevMode(appServerId: String, syncServiceId: String, syncServiceConfiguration: [String: Any]) -> Result<Any?, Error> {
         guard let session = session else {
-            completion(.failure(URLError.unknown as! Error))
-            return
+            return .failure(URLError.unknown as! Error)
         }
         let app = session.apps[appServerId]
-        app.sync.config.put(data: ["development_mode_enabled": true], completion)
+        return app.sync.config.put(["development_mode_enabled": true])
     }
 
-    public func disableSync(appServerId: String, syncServiceId: String, completion: @escaping (Result<Any?, Error>) -> Void) {
+    public func disableSync(flexibleSync: Bool = false, appServerId: String, syncServiceId: String)
+            -> Result<Any?, Error> {
+        let configOption = flexibleSync ? "flexible_sync" : "sync"
         guard let session = session else {
-            completion(.failure(URLError.unknown as! Error))
-            return
+            return .failure(URLError.unknown as! Error)
         }
         let app = session.apps[appServerId]
-        app.services[syncServiceId].config.patch(["sync": ["state": ""]], completion)
+        return app.services[syncServiceId].config.patch([configOption: ["state": ""]])
     }
 
-    public func enableSync(appServerId: String, syncServiceId: String, syncServiceConfiguration: [String: Any], _ completion: @escaping (Result<Any?, Error>) -> Void) {
+    public func enableSync(flexibleSync: Bool = false, appServerId: String, syncServiceId: String, syncServiceConfiguration: [String: Any]) -> Result<Any?, Error> {
+        let configOption = flexibleSync ? "flexible_sync" : "sync"
         var syncConfig = syncServiceConfiguration
         guard let session = session else {
-            completion(.failure(URLError.unknown as! Error))
-            return
+            return .failure(URLError.unknown as! Error)
         }
         let app = session.apps[appServerId]
-        guard var syncInfo = syncConfig["sync"] as? [String: Any] else {
-            completion(.failure(URLError.unknown as! Error))
-            return
+        guard var syncInfo = syncConfig[configOption] as? [String: Any] else {
+            return .failure(URLError.unknown as! Error)
         }
         syncInfo["state"] = "enabled"
-        syncConfig["sync"] = syncInfo
-        app.services[syncServiceId].config.patch(syncConfig, completion)
+        syncConfig[configOption] = syncInfo
+        return app.services[syncServiceId].config.patch(syncConfig)
     }
 
-    public func retrieveUser(_ appId: String, userId: String, _ completion: @escaping (Result<Any?, Error>) -> Void) {
+    public func patchRecoveryMode(flexibleSync: Bool, disable: Bool, _ appServerId: String,
+                                  _ syncServiceId: String, _ syncServiceConfiguration: [String: Any]) -> Result<Any?, Error> {
+        guard let session = session else {
+            return .failure(URLError.unknown as! Error)
+        }
+
+        let configOption = flexibleSync ? "flexible_sync" : "sync"
+        let app = session.apps[appServerId]
+        var syncConfig = syncServiceConfiguration
+        return app.services[syncServiceId].config.get()
+            .map { response in
+                guard let config = response as? [String: Any] else { return false }
+                guard let syncInfo = config[configOption] as? [String: Any] else { return false }
+                return syncInfo["is_recovery_mode_disabled"] as? Bool ?? false
+            }
+            .flatMap { (isDisabled: Bool) in
+                if isDisabled == disable {
+                    return .success(syncConfig)
+                }
+
+                guard var syncInfo = syncConfig[configOption] as? [String: Any] else {
+                    return .failure(URLError.unknown as! Error)
+                }
+
+                syncInfo["is_recovery_mode_disabled"] = disable
+                syncConfig[configOption] = syncInfo
+                return app.services[syncServiceId].config.patch(syncConfig)
+            }
+    }
+
+    public func retrieveUser(_ appId: String, userId: String) -> Result<Any?, Error> {
         guard let appServerId = try? RealmServer.shared.retrieveAppServerId(appId),
               let session = session else {
-            completion(.failure(URLError.unknown as! Error))
-            return
+            return .failure(URLError.unknown as! Error)
         }
-        let app = session.apps[appServerId]
-        app.users[userId].get(completion)
+        return session.apps[appServerId].users[userId].get()
     }
 
     // Remove User from Atlas App Services using the Admin API
-    public func removeUserForApp(_ appId: String, userId: String, _ completion: @escaping (Result<Any?, Error>) -> Void) {
+    public func removeUserForApp(_ appId: String, userId: String) -> Result<Any?, Error> {
         guard let appServerId = try? RealmServer.shared.retrieveAppServerId(appId),
               let session = session else {
+            return .failure(URLError.unknown as! Error)
+        }
+        return session.apps[appServerId].users[userId].delete()
+    }
+
+    public func retrieveSchemaProperties(_ appId: String, className: String, _ completion: @escaping (Result<[String], Error>) -> Void) {
+        guard let appServerId = try? RealmServer.shared.retrieveAppServerId(appId),
+              let session = session else {
+            fatalError()
+        }
+
+        guard let schemasList = try? session.apps[appServerId].schemas.get().get(),
+              let schemas = schemasList as? [[String: Any]],
+              let schemaSelected = schemas.first(where: { ($0["metadata"] as? [String: String])?["collection"] == className }) else {
             completion(.failure(URLError.unknown as! Error))
             return
         }
-        let app = session.apps[appServerId]
-        app.users[userId].delete(completion)
+
+        guard let schema = try? session.apps[appServerId].schemas[schemaSelected["_id"] as! String].get().get(),
+              let schemaProperties = ((schema as? [String: Any])?["schema"] as? [String: Any])?["properties"] as? [String: Any] else {
+            completion(.failure(URLError.unknown as! Error))
+            return
+        }
+
+        completion(.success(schemaProperties.compactMap { $0.key }))
     }
 }
 
