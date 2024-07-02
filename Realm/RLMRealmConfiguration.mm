@@ -32,7 +32,7 @@
 #import "RLMUser_Private.hpp"
 
 #import <realm/object-store/sync/sync_manager.hpp>
-#import <realm/object-store/util/bson/bson.hpp>
+#import <realm/util/bson/bson.hpp>
 #import <realm/sync/config.hpp>
 #else
 @class RLMSyncConfiguration;
@@ -128,8 +128,8 @@ NSString *RLMRealmPathForFile(NSString *fileName) {
     configuration->_migrationBlock = _migrationBlock;
     configuration->_shouldCompactOnLaunch = _shouldCompactOnLaunch;
     configuration->_customSchema = _customSchema;
-    configuration->_initialSubscriptions = _initialSubscriptions;
-    configuration->_rerunOnOpen = _rerunOnOpen;
+    configuration->_eventConfiguration = _eventConfiguration;
+    configuration->_migrationObjectClass = _migrationObjectClass;
     return configuration;
 }
 
@@ -172,7 +172,6 @@ NSString *RLMRealmPathForFile(NSString *fileName) {
     if (inMemoryIdentifier.length == 0) {
         @throw RLMException(@"In-memory identifier must not be empty");
     }
-    _config.sync_config = nullptr;
     _seedFilePath = nil;
 
     RLMNSStringToStdString(_config.path, [NSTemporaryDirectory() stringByAppendingPathComponent:inMemoryIdentifier]);
@@ -333,9 +332,7 @@ static bool isSync(realm::Realm::Config const& config) {
         if (_config.immutable()) {
             @throw RLMException(@"Cannot set `shouldCompactOnLaunch` when `readOnly` is set.");
         }
-        _config.should_compact_on_launch_function = [=](size_t totalBytes, size_t usedBytes) {
-            return shouldCompactOnLaunch(totalBytes, usedBytes);
-        };
+        _config.should_compact_on_launch_function = shouldCompactOnLaunch;
     }
     else {
         _config.should_compact_on_launch_function = nullptr;
@@ -347,20 +344,26 @@ static bool isSync(realm::Realm::Config const& config) {
     _customSchema = schema;
 }
 
+- (bool)disableAutomaticChangeNotifications {
+    return !_config.automatic_change_notifications;
+}
+
+- (void)setDisableAutomaticChangeNotifications:(bool)disableAutomaticChangeNotifications {
+    _config.automatic_change_notifications = !disableAutomaticChangeNotifications;
+}
+
 #if REALM_ENABLE_SYNC
 - (void)setSyncConfiguration:(RLMSyncConfiguration *)syncConfiguration {
     if (syncConfiguration == nil) {
         _config.sync_config = nullptr;
         return;
     }
-    RLMUser *user = syncConfiguration.user;
-    if (user.state == RLMUserStateRemoved) {
-        @throw RLMException(@"Cannot set a sync configuration which has an errored-out user.");
+    auto& rawConfig = syncConfiguration.rawConfiguration;
+    if (rawConfig.user->state() == realm::SyncUser::State::Removed) {
+        @throw RLMException(@"Cannot set a sync configuration which has a removed user.");
     }
 
-    NSAssert(user.identifier, @"Cannot call this method on a user that doesn't have an identifier.");
-    _config.in_memory = false;
-    _config.sync_config = std::make_shared<realm::SyncConfig>(syncConfiguration.rawConfiguration);
+    _config.sync_config = std::make_shared<realm::SyncConfig>(rawConfig);
     _config.path = syncConfiguration.path;
 
     // The manual client reset handler doesn't exist on the raw config,

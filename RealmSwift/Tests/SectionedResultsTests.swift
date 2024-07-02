@@ -60,15 +60,15 @@ class BasePrimitiveSectionedResultsTests<TestData: SectionedResultsTestData>: RL
         autoreleasepool { super.invokeTest() }
     }
 
-    private func assert<T: RealmCollection>(_ collection: T, asending: Bool = true) where T.Element == TestData.Element {
-        let sectionedResults = collection.sectioned(by: TestData.sectionBlock, ascending: asending)
+    private func assert<T: RealmCollection>(_ collection: T, ascending: Bool = true) where T.Element == TestData.Element {
+        let sectionedResults = collection.sectioned(by: TestData.sectionBlock, ascending: ascending)
         var sectionCount = 0
         var elementCount = 0
-        let keys = TestData.orderedKeys(ascending: asending)
+        let keys = TestData.orderedKeys(ascending: ascending)
         for section in sectionedResults {
             XCTAssertEqual(section.key, keys[sectionCount])
             sectionCount += 1
-            let expValues = asending ? TestData.expectedSectionedValues[section.key] : TestData.expectedSectionedValues[section.key]!.reversed()
+            let expValues = ascending ? TestData.expectedSectionedValues[section.key] : TestData.expectedSectionedValues[section.key]!.reversed()
             for (i, value) in expValues!.enumerated() {
                 XCTAssertEqual(section[i], value)
                 elementCount += 1
@@ -82,27 +82,27 @@ class BasePrimitiveSectionedResultsTests<TestData: SectionedResultsTestData>: RL
         if !TestData.skipResultsTests {
             let results = TestData.results(obj!)
             assert(results)
-            assert(results, asending: false)
+            assert(results, ascending: false)
         }
     }
 
     func testCreationFromList() {
         let list = TestData.list(obj!)
         assert(list)
-        assert(list, asending: false)
+        assert(list, ascending: false)
     }
 
     func testCreationFromMutableSet() {
         let set = TestData.mutableSet(obj!)
         assert(set)
-        assert(set, asending: false)
+        assert(set, ascending: false)
     }
 
     func testCreationFromAnyRealmCollection() {
         if !TestData.skipResultsTests {
             let collection = TestData.anyRealmCollection(obj!)
             assert(collection)
-            assert(collection, asending: false)
+            assert(collection, ascending: false)
         }
     }
 
@@ -236,7 +236,7 @@ class BaseOptionalPrimitiveSectionedResultsTests<TestData: OptionalSectionedResu
     }
 }
 
-class PrimitiveSectionedResultsTests: TestCase {
+class PrimitiveSectionedResultsTests: TestCase, @unchecked Sendable {
     override class var defaultTestSuite: XCTestSuite {
         let suite = XCTestSuite(name: "Primitive SectionedResults Tests")
 
@@ -372,7 +372,7 @@ class SectionedResultsTests: SectionedResultsTestsBase {
         let results = realm.objects(ModernAllTypesObject.self)
         let sectionedResults = results.sectioned(by: \.firstLetter, ascending: true)
         let ex = expectation(description: "initial notification")
-        let token = sectionedResults.observe { (changes: RealmSectionedResultsChange) in
+        let token = sectionedResults.observe { (changes: SectionedResultsChange) in
             switch changes {
             case .initial(let collection):
                 XCTAssertEqual(collection.count, 3)
@@ -486,7 +486,7 @@ class SectionedResultsTests: SectionedResultsTestsBase {
         let queue = DispatchQueue(label: "background")
         var firstRun = true
         let token = sectionedResults.observe(keyPaths: [\.stringCol],
-                                             on: queue) { (changes: RealmSectionedResultsChange) in
+                                             on: queue) { (changes: SectionedResultsChange) in
             switch changes {
             case .initial(let collection):
                 XCTAssertEqual(collection.count, 3)
@@ -544,7 +544,7 @@ class SectionedResultsTests: SectionedResultsTestsBase {
 
         var firstRun = true
         // Only get notifications for key 'a'.
-        let token1 = section1.observe(keyPaths: [\.stringCol]) { (changes: RealmSectionedResultsChange) in
+        let token1 = section1.observe(keyPaths: [\.stringCol]) { (changes: SectionedResultsChange) in
             switch changes {
             case .initial(let collection):
                 XCTAssertEqual(collection.count, 1)
@@ -565,7 +565,7 @@ class SectionedResultsTests: SectionedResultsTestsBase {
         }
 
         // Only get notifications for key 'b'.
-        let token2 = section2.observe(keyPaths: [\.stringCol]) { (changes: RealmSectionedResultsChange) in
+        let token2 = section2.observe(keyPaths: [\.stringCol]) { (changes: SectionedResultsChange) in
             switch changes {
             case .initial(let collection):
                 if firstRun {
@@ -626,7 +626,7 @@ class SectionedResultsTests: SectionedResultsTestsBase {
         var firstRun = true
         // Only get notifications for key 'a'.
         let token1 = section1.observe(keyPaths: [\.stringCol],
-                                      on: queue) { (changes: RealmSectionedResultsChange) in
+                                      on: queue) { (changes: SectionedResultsChange) in
             switch changes {
             case .initial(let collection):
                 XCTAssertEqual(collection.count, 1)
@@ -650,7 +650,7 @@ class SectionedResultsTests: SectionedResultsTestsBase {
         sema1.wait()
         // Only get notifications for key 'b'.
         let token2 = section2.observe(keyPaths: [\.stringCol],
-                                      on: queue) { (changes: RealmSectionedResultsChange) in
+                                      on: queue) { (changes: SectionedResultsChange) in
             switch changes {
             case .initial(let collection):
                 if firstRun {
@@ -850,7 +850,7 @@ class SectionedResultsProjectionTests: SectionedResultsTestsBase {
         let results = realm.objects(ModernAllTypesProjection.self)
         let sectionedResults = results.sectioned(by: \.firstLetter, ascending: true)
         let ex = expectation(description: "initial notification")
-        let token = sectionedResults.observe { (changes: RealmSectionedResultsChange) in
+        let token = sectionedResults.observe { (changes: SectionedResultsChange) in
             switch changes {
             case .initial(let collection):
                 XCTAssertEqual(collection.count, 3)
@@ -889,7 +889,7 @@ class SectionedResultsProjectionTests: SectionedResultsTestsBase {
         let queue = DispatchQueue(label: "background")
         var firstRun = true
         let token = sectionedResults.observe(keyPaths: ["stringCol"],
-                                             on: queue) { (changes: RealmSectionedResultsChange) in
+                                             on: queue) { (changes: SectionedResultsChange) in
             switch changes {
             case .initial(let collection):
                 XCTAssertEqual(collection.count, 3)
@@ -947,7 +947,7 @@ class SectionedResultsProjectionTests: SectionedResultsTestsBase {
 
         var firstRun = true
         // Only get notifications for key 'a'.
-        let token1 = section1.observe(keyPaths: ["stringCol"]) { (changes: RealmSectionedResultsChange) in
+        let token1 = section1.observe(keyPaths: ["stringCol"]) { (changes: SectionedResultsChange) in
             switch changes {
             case .initial(let collection):
                 XCTAssertEqual(collection.count, 1)
@@ -968,7 +968,7 @@ class SectionedResultsProjectionTests: SectionedResultsTestsBase {
         }
 
         // Only get notifications for key 'b'.
-        let token2 = section2.observe(keyPaths: ["stringCol"]) { (changes: RealmSectionedResultsChange) in
+        let token2 = section2.observe(keyPaths: ["stringCol"]) { (changes: SectionedResultsChange) in
             switch changes {
             case .initial(let collection):
                 if firstRun {
@@ -1029,7 +1029,7 @@ class SectionedResultsProjectionTests: SectionedResultsTestsBase {
         var firstRun = true
         // Only get notifications for key 'a'.
         let token1 = section1.observe(keyPaths: ["stringCol"],
-                                      on: queue) { (changes: RealmSectionedResultsChange) in
+                                      on: queue) { (changes: SectionedResultsChange) in
             switch changes {
             case .initial(let collection):
                 XCTAssertEqual(collection.count, 1)
@@ -1053,7 +1053,7 @@ class SectionedResultsProjectionTests: SectionedResultsTestsBase {
         sema1.wait()
         // Only get notifications for key 'b'.
         let token2 = section2.observe(keyPaths: ["stringCol"],
-                                      on: queue) { (changes: RealmSectionedResultsChange) in
+                                      on: queue) { (changes: SectionedResultsChange) in
             switch changes {
             case .initial(let collection):
                 if firstRun {
@@ -1256,7 +1256,6 @@ extension OptionalSectionedResultsTestData {
 }
 
 struct SectionedResultsTestDataInt: SectionedResultsTestData {
-
     static var values: [Int] {
         [5, 4, 3, 2, 1]
     }
@@ -1557,7 +1556,7 @@ struct SectionedResultsTestDataAnyRealmValue: SectionedResultsTestData {
     }
 
     static func orderedKeys(ascending: Bool) -> [String] {
-        return ["alphanumeric", "data"]
+        return ascending ? ["alphanumeric", "data"] : ["data", "alphanumeric"]
     }
 
     static func setupObject() -> ModernAllTypesObject {
@@ -1604,14 +1603,14 @@ struct SectionedResultsTestDataBinary: SectionedResultsTestData {
          Data(base64Encoded: "abstract")!]
     }
     static var expectedSectionedValues: [String: [Data]] {
-        ["short": [Data(base64Encoded: "more")!,
-                     Data(base64Encoded: "door")!],
+        ["short": [Data(base64Encoded: "door")!,
+                   Data(base64Encoded: "more")!],
          "long": [Data(base64Encoded: "absolute")!,
-                     Data(base64Encoded: "abstract")!]]
+                  Data(base64Encoded: "abstract")!]]
     }
 
     static func orderedKeys(ascending: Bool) -> [String] {
-        return ["short", "long"]
+        ascending ? ["long", "short"] : ["short", "long"]
     }
 
     static func setupObject() -> ModernAllTypesObject {
@@ -1644,13 +1643,13 @@ struct SectionedResultsTestDataOptionalBinary: OptionalSectionedResultsTestData 
          Data(base64Encoded: "abstract")!]
     }
     static var expectedSectionedValuesOpt: [String?: [Data??]] {
-        ["short": [Data(base64Encoded: "more")!, Data(base64Encoded: "door")!],
+        ["short": [Data(base64Encoded: "door")!, Data(base64Encoded: "more")!],
          "long": [Data(base64Encoded: "absolute")!, Data(base64Encoded: "abstract")!],
          nil: [.some(.none)]]
     }
 
     static func orderedKeysOpt(ascending: Bool) -> [String?] {
-        return ascending ? [nil, "short", "long"] : ["short", "long", nil]
+        ascending ? [nil, "long", "short"] : ["short", "long", nil]
     }
 
     static func setupObject() -> ModernAllTypesObject {

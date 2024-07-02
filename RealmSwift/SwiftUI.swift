@@ -18,13 +18,12 @@
 
 import Foundation
 
-#if !(os(iOS) && (arch(i386) || arch(arm)))
 import SwiftUI
 import Combine
 import Realm
 import Realm.Private
 
-private func safeWrite<Value>(_ value: Value, _ block: (Value) -> Void) where Value: ThreadConfined {
+private func write<Value>(_ value: Value, _ block: (Value) -> Void) where Value: ThreadConfined {
     let thawed = value.realm == nil ? value : value.thaw() ?? value
     if let realm = thawed.realm, !realm.isInWriteTransaction {
         try! realm.write {
@@ -57,7 +56,7 @@ private func createBinding<T: ThreadConfined, V>(
         return lastValue
     }, set: { newValue in
         guard !value.isInvalidated else { return }
-        safeWrite(value) { value in
+        write(value) { value in
             value[keyPath: keyPath] = newValue
         }
     })
@@ -82,7 +81,7 @@ private func createCollectionBinding<T: ThreadConfined, V: RLMSwiftCollectionBas
         return lastValue
     }, set: { newValue in
         guard !value.isInvalidated else { return }
-        safeWrite(value) { value in
+        write(value) { value in
             value[keyPath: keyPath] = newValue
         }
     })
@@ -105,7 +104,7 @@ private func createEquatableBinding<T: ThreadConfined, V: Equatable>(
     }, set: { newValue in
         guard !value.isInvalidated else { return }
         guard value[keyPath: keyPath] != newValue else { return }
-        safeWrite(value) { value in
+        write(value) { value in
             value[keyPath: keyPath] = newValue
         }
     })
@@ -118,9 +117,22 @@ private func createEquatableBinding<T: ThreadConfined, V: Equatable>(
     /// Objects must have observers removed before being added to a realm.
     /// They are stored here so that if they are appended through the Bound Property
     /// system, they can be de-observed before hand.
-    fileprivate static var observedObjects = [NSObject: SwiftUIKVO.Subscription]()
+    private static let observedObjects = AllocatedUnfairLock([NSObject: Subscription]())
 
-    @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
+    static func store(_ obj: NSObject, _ subscription: Subscription) {
+        SwiftUIKVO.observedObjects.withLock {
+            $0[obj] = subscription
+        }
+    }
+
+    static func cancel(_ obj: NSObject) {
+        SwiftUIKVO.observedObjects.withLock {
+            if let subscription: Subscription = $0.removeValue(forKey: obj) {
+                subscription.removeObservers()
+            }
+        }
+    }
+
     struct Subscription: Combine.Subscription {
         let observer: NSObject
         let value: NSObject
@@ -134,23 +146,16 @@ private func createEquatableBinding<T: ThreadConfined, V: Equatable>(
         }
 
         func cancel() {
-            removeObservers()
-            SwiftUIKVO.observedObjects.removeValue(forKey: value)
+            SwiftUIKVO.cancel(value)
         }
 
         fileprivate func removeObservers() {
-            guard SwiftUIKVO.observedObjects.keys.contains(value) else {
-                return
-            }
             keyPaths.forEach {
                 value.removeObserver(observer, forKeyPath: $0)
             }
         }
 
         fileprivate func addObservers() {
-            guard SwiftUIKVO.observedObjects.keys.contains(value) else {
-                return
-            }
             keyPaths.forEach {
                 value.addObserver(observer, forKeyPath: $0, options: .init(), context: nil)
             }
@@ -178,7 +183,7 @@ private final class ObservableStoragePublisher<ObjectType>: Publisher where Obje
     public typealias Failure = Never
 
     var subscribers = [AnySubscriber<Void, Never>]()
-    private let value: ObjectType
+    private var value: ObjectType
     private let keyPaths: [String]?
     private let unwrappedValue: ObjectBase?
 
@@ -198,6 +203,11 @@ private final class ObservableStoragePublisher<ObjectType>: Publisher where Obje
         self.value = value
         self.keyPaths = keyPaths
         self.unwrappedValue = value.rootObject
+    }
+
+    // Refresh the publisher with a managed object.
+    func update(value: ObjectType) {
+        self.value = value
     }
 
     func send() {
@@ -225,7 +235,7 @@ private final class ObservableStoragePublisher<ObjectType>: Publisher where Obje
             }
             let subscription = SwiftUIKVO.Subscription(observer: kvo, value: value, keyPaths: keyPaths)
             subscriber.receive(subscription: subscription)
-            SwiftUIKVO.observedObjects[value] = subscription
+            SwiftUIKVO.store(value, subscription)
         }
     }
 }
@@ -235,10 +245,11 @@ private class ObservableStorage<ObservedType>: ObservableObject where ObservedTy
     @Published var value: ObservedType {
         willSet {
             if newValue != value {
+                objectWillChange.send()
+                objectWillChange.update(value: newValue)
                 objectWillChange.subscribers.forEach {
                     $0.receive(subscription: ObservationSubscription(token: newValue._observe(keyPaths, $0)))
                 }
-                objectWillChange.send()
             }
         }
     }
@@ -280,10 +291,9 @@ private class ObservableResultsStorage<T>: ObservableStorage<T> where T: RealmSu
     }
 
     func setupValue() {
-        if !setupHasRun {
-            updateValue()
-            setupHasRun = true
-        }
+        guard !setupHasRun else { return }
+        updateValue()
+        setupHasRun = true
     }
 
     var sortDescriptor: SortDescriptor? {
@@ -310,12 +320,12 @@ private class ObservableResultsStorage<T>: ObservableStorage<T> where T: RealmSu
     }
 
     private var searchString: String = ""
-    fileprivate func searchText<T: ObjectBase>(_ text: String, on keyPath: KeyPath<T, String>) {
+    fileprivate func searchText<U: ObjectBase>(_ text: String, on keyPath: KeyPath<U, String>) {
         guard text != searchString else { return }
         if text.isEmpty {
             searchFilter = nil
         } else {
-            searchFilter = Query<T>()[dynamicMember: keyPath].contains(text).predicate
+            searchFilter = Query<U>()[dynamicMember: keyPath].contains(text).predicate
         }
         searchString = text
     }
@@ -610,11 +620,13 @@ extension Projection: _ObservedResultsValue { }
         self.sortDescriptor = sortDescriptor
     }
 
-    public func update() {
-        // When the view updates, it will inject the @Environment
-        // into the propertyWrapper
-        if storage.configuration == nil {
-            storage.configuration = configuration
+    nonisolated public func update() {
+        assumeOnMainActorExecutor {
+            // When the view updates, it will inject the @Environment
+            // into the propertyWrapper
+            if storage.configuration == nil {
+                storage.configuration = configuration
+            }
         }
     }
 }
@@ -632,7 +644,10 @@ extension Projection: _ObservedResultsValue { }
 @propertyWrapper public struct ObservedSectionedResults<Key: _Persistable & Hashable, ResultType>: DynamicProperty, BoundCollection where ResultType: _ObservedResultsValue & RealmFetchable & KeypathSortable & Identifiable {
     public typealias Element = ResultType
 
-    private class Storage: ObservableResultsStorage<SectionedResults<Key, ResultType>> {
+    private class Storage: ObservableResultsStorage<Results<ResultType>> {
+        var sectionedResults: SectionedResults<Key, ResultType>!
+        var token: AnyCancellable?
+
         override func updateValue() {
             let realm = try! Realm(configuration: configuration ?? Realm.Configuration.defaultConfiguration)
             var results = realm.objects(ResultType.self)
@@ -647,7 +662,24 @@ extension Projection: _ObservedResultsValue { }
                 sortDescriptors.append(.init(keyPath: keyPathString, ascending: true))
             }
 
-            value = results.sectioned(sortDescriptors: sortDescriptors, sectionBlock)
+            value = results
+
+            /*
+             Observing the sectioned results directly doesn't allow the SwiftUI diff to work
+             correctly as the previous state of the sectioned results will have the new values.
+
+             An example of when this is an issue is when an item is deleted in a List containing sectioned results,
+             the diff needs a stable state of the previous transaction but due to
+             the observation callback calling calculate_sections the collection will be brought up to date.
+
+             The solution around this is to store a frozen copy of the sectioned results and observe the parent `Results` instead.
+             Each time the results observation callback is invoked and the SwiftUI View is redrawn the sectioned results will be updated.
+             */
+            sectionedResults = value.sectioned(sortDescriptors: sortDescriptors, sectionBlock).freeze()
+            token = self.objectWillChange.sink { [weak self] _ in
+                guard let self = self else { return }
+                self.sectionedResults = self.value.sectioned(sortDescriptors: self.sortDescriptors, self.sectionBlock).freeze()
+            }
         }
 
         var sortDescriptors: [SortDescriptor] = [] {
@@ -672,7 +704,7 @@ extension Projection: _ObservedResultsValue { }
             if self.sortDescriptors.isEmpty {
                 throwRealmException("sortDescriptors must not be empty when sectioning ObservedSectionedResults with `sectionBlock`")
             }
-            super.init(value.sectioned(sortDescriptors: self.sortDescriptors, self.sectionBlock), keyPaths)
+            super.init(value, keyPaths)
         }
     }
 
@@ -705,11 +737,23 @@ extension Projection: _ObservedResultsValue { }
     /// :nodoc:
     public var wrappedValue: SectionedResults<Key, ResultType> {
         storage.setupValue()
-        return storage.value
+        return storage.sectionedResults
     }
     /// :nodoc:
     public var projectedValue: Self {
         return self
+    }
+
+    /// Removes items from an `@ObservedSectionedResults` collection
+    /// with a given `IndexSet` and `ResultsSection`.
+    /// - Parameters:
+    ///   - offsets: Index offsets in the section.
+    ///   - section: The section containing the items to remove.
+    public func remove(atOffsets offsets: IndexSet,
+                       section: ResultsSection<Key, ResultType>) where ResultType: ObjectBase & ThreadConfined {
+        write(wrappedValue) { collection in
+            collection.realm?.delete(offsets.compactMap { section[$0].thaw() ?? nil })
+        }
     }
 
     private init(type: ResultType.Type,
@@ -967,11 +1011,13 @@ extension Projection: _ObservedResultsValue { }
                   configuration: configuration)
     }
 
-    public func update() {
-        // When the view updates, it will inject the @Environment
-        // into the propertyWrapper
-        if storage.configuration == nil {
-            storage.configuration = configuration
+    nonisolated public func update() {
+        assumeOnMainActorExecutor {
+            // When the view updates, it will inject the @Environment
+            // into the propertyWrapper
+            if storage.configuration == nil {
+                storage.configuration = configuration
+            }
         }
     }
 }
@@ -1089,6 +1135,7 @@ extension Binding where Value: ObjectBase & ThreadConfined {
 
 /// :nodoc:
 @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
+@preconcurrency @MainActor
 public protocol BoundCollection {
     /// :nodoc:
     associatedtype Value
@@ -1097,6 +1144,13 @@ public protocol BoundCollection {
 
     /// :nodoc:
     var wrappedValue: Value { get }
+}
+
+@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
+extension BoundCollection {
+    private func write(_ block: (Value) -> Void) where Value: ThreadConfined {
+        RealmSwift.write(wrappedValue, block)
+    }
 }
 
 @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
@@ -1113,28 +1167,28 @@ public extension BoundCollection where Value: RealmCollection {
 public extension BoundCollection where Value == List<Element> {
     /// :nodoc:
     func remove(at index: Index) {
-        safeWrite(self.wrappedValue) { list in
+        write { list in
             list.remove(at: index)
         }
     }
 
     /// :nodoc:
     func remove(atOffsets offsets: IndexSet) {
-        safeWrite(self.wrappedValue) { list in
+        write { list in
             list.remove(atOffsets: offsets)
         }
     }
 
     /// :nodoc:
     func move(fromOffsets offsets: IndexSet, toOffset destination: Int) {
-        safeWrite(self.wrappedValue) { list in
+        write { list in
             list.move(fromOffsets: offsets, toOffset: destination)
         }
     }
 
     /// :nodoc:
     func append(_ value: Value.Element) {
-        safeWrite(self.wrappedValue) { list in
+        write { list in
             list.append(value)
         }
     }
@@ -1144,11 +1198,10 @@ public extension BoundCollection where Value == List<Element> {
 public extension BoundCollection where Value == List<Element>, Element: ObjectBase & ThreadConfined {
     /// :nodoc:
     func append(_ value: Value.Element) {
-        // if the value is unmanaged but the list is managed, we are adding this value to the realm
-        if value.realm == nil && self.wrappedValue.realm != nil {
-            SwiftUIKVO.observedObjects[value]?.cancel()
-        }
-        safeWrite(self.wrappedValue) { list in
+        write { list in
+            if value.realm == nil && list.realm != nil {
+                SwiftUIKVO.cancel(value)
+            }
             list.append(thawObjectIfFrozen(value))
         }
     }
@@ -1158,17 +1211,16 @@ public extension BoundCollection where Value == List<Element>, Element: ObjectBa
 public extension BoundCollection where Value == Results<Element>, Element: ObjectBase & ThreadConfined {
     /// :nodoc:
     func remove(_ object: Value.Element) {
-        guard let thawed = object.thaw(),
-              let index = wrappedValue.thaw()?.index(of: thawed) else {
-            return
-        }
-        safeWrite(self.wrappedValue) { results in
-            results.realm?.delete(results[index])
+        guard let thawed = object.thaw() else { return }
+        write { results in
+            if results.index(of: thawed) != nil {
+                results.realm?.delete(thawed)
+            }
         }
     }
     /// :nodoc:
     func remove(atOffsets offsets: IndexSet) {
-        safeWrite(self.wrappedValue) { results in
+        write { results in
             results.realm?.delete(Array(offsets.map { results[$0] }))
         }
     }
@@ -1178,13 +1230,13 @@ public extension BoundCollection where Value == Results<Element>, Element: Objec
 public extension BoundCollection where Value == MutableSet<Element> {
     /// :nodoc:
     func remove(_ element: Value.Element) {
-        safeWrite(self.wrappedValue) { mutableSet in
+        write { mutableSet in
             mutableSet.remove(element)
         }
     }
     /// :nodoc:
     func insert(_ value: Value.Element) {
-        safeWrite(self.wrappedValue) { mutableSet in
+        write { mutableSet in
             mutableSet.insert(value)
         }
     }
@@ -1194,17 +1246,16 @@ public extension BoundCollection where Value == MutableSet<Element> {
 public extension BoundCollection where Value == MutableSet<Element>, Element: ObjectBase & ThreadConfined {
     /// :nodoc:
     func remove(_ object: Value.Element) {
-        safeWrite(self.wrappedValue) { mutableSet in
+        write { mutableSet in
             mutableSet.remove(thawObjectIfFrozen(object))
         }
     }
     /// :nodoc:
     func insert(_ value: Value.Element) {
-        // if the value is unmanaged but the set is managed, we are adding this value to the realm
-        if value.realm == nil && self.wrappedValue.realm != nil {
-            SwiftUIKVO.observedObjects[value]?.cancel()
-        }
-        safeWrite(self.wrappedValue) { mutableSet in
+        write { mutableSet in
+            if value.realm == nil && mutableSet.realm != nil {
+                SwiftUIKVO.cancel(value)
+            }
             mutableSet.insert(thawObjectIfFrozen(value))
         }
     }
@@ -1214,10 +1265,10 @@ public extension BoundCollection where Value == MutableSet<Element>, Element: Ob
 public extension BoundCollection where Value == Results<Element>, Element: Object {
     /// :nodoc:
     func append(_ value: Value.Element) {
-        if value.realm == nil && self.wrappedValue.realm != nil {
-            SwiftUIKVO.observedObjects[value]?.cancel()
-        }
-        safeWrite(self.wrappedValue) { results in
+        write { results in
+            if value.realm == nil && results.realm != nil {
+                SwiftUIKVO.cancel(value)
+            }
             results.realm?.add(thawObjectIfFrozen(value))
         }
     }
@@ -1227,10 +1278,10 @@ public extension BoundCollection where Value == Results<Element>, Element: Objec
 public extension BoundCollection where Value == Results<Element>, Element: ProjectionObservable & ThreadConfined, Element.Root: Object {
     /// :nodoc:
     func append(_ value: Value.Element) {
-        if value.realm == nil && self.wrappedValue.realm != nil {
-            SwiftUIKVO.observedObjects[value.rootObject]?.cancel()
-        }
-        safeWrite(self.wrappedValue) { results in
+        write { results in
+            if value.realm == nil && results.realm != nil {
+                SwiftUIKVO.cancel(value.rootObject)
+            }
             results.realm?.add(thawObjectIfFrozen(value.rootObject))
         }
     }
@@ -1270,7 +1321,7 @@ public extension BoundMap {
 
     /// :nodoc:
     func set(object: Value.Value?, for key: Value.Key) {
-        safeWrite(self.wrappedValue) { map in
+        write(self.wrappedValue) { map in
             var m = map
             m[key] = object
         }
@@ -1284,16 +1335,16 @@ public extension BoundMap where Value.Value: ObjectBase & ThreadConfined {
     func set(object: Value.Value?, for key: Value.Key) {
         // If the value is `nil` remove it from the map.
         guard let value = object else {
-            safeWrite(self.wrappedValue) { map in
+            write(self.wrappedValue) { map in
                 map.removeObject(for: key)
             }
             return
         }
         // if the value is unmanaged but the map is managed, we are adding this value to the realm
         if value.realm == nil && self.wrappedValue.realm != nil {
-            SwiftUIKVO.observedObjects[value]?.cancel()
+            SwiftUIKVO.cancel(value)
         }
-        safeWrite(self.wrappedValue) { map in
+        write(self.wrappedValue) { map in
             var m = map
             m[key] = thawObjectIfFrozen(value)
         }
@@ -1308,7 +1359,7 @@ extension Binding: BoundMap where Value: RealmKeyedCollection {
 extension Binding where Value: Object {
     /// :nodoc:
     public func delete() {
-        safeWrite(wrappedValue) { object in
+        write(wrappedValue) { object in
             object.realm?.delete(thawObjectIfFrozen(self.wrappedValue))
         }
     }
@@ -1318,7 +1369,7 @@ extension Binding where Value: Object {
 extension Binding where Value: ProjectionObservable, Value.Root: ThreadConfined {
     /// :nodoc:
     public func delete() {
-        safeWrite(wrappedValue.rootObject) { object in
+        write(wrappedValue.rootObject) { object in
             object.realm?.delete(thawObjectIfFrozen(object))
         }
     }
@@ -1350,7 +1401,7 @@ extension ThreadConfined where Self: ProjectionObservable {
 extension ObservedRealmObject.Wrapper where ObjectType: ObjectBase {
     /// :nodoc:
     public func delete() {
-        safeWrite(wrappedValue) { object in
+        write(wrappedValue) { object in
             object.realm?.delete(self.wrappedValue)
         }
     }
@@ -1450,69 +1501,88 @@ private class ObservableAsyncOpenStorage: ObservableObject {
         case loggedIn(User)
         case loggedOut
     }
-    private var appState: AppState {
-        didSet {
-            switch appState {
-            case .loggedIn(let user):
-                self.asyncOpenForUser(user)
-            case .loggedOut:
-                asyncOpenState = .waitingForUser
-            }
-        }
-    }
+    private var appState: AppState = .loggedOut
 
     // Cancellables
     private var appCancellable = [AnyCancellable]()
     private var asyncOpenCancellable = [AnyCancellable]()
 
-    @Published var asyncOpenState: AsyncOpenState = .connecting {
-        willSet {
-            objectWillChange.send()
+    @Published fileprivate var asyncOpenState: AsyncOpenState
+
+    init(asyncOpenKind: AsyncOpenKind, app: App, configuration: Realm.Configuration?, partitionValue: AnyBSON?) {
+        self.asyncOpenKind = asyncOpenKind
+        self.app = app
+        self.configuration = configuration
+        self.partitionValue = partitionValue
+
+        // Initialising the state value depending on the user status, before first rendering.
+        if let user = app.currentUser {
+            appState = .loggedIn(user)
+            asyncOpenState = .connecting
+        } else {
+            asyncOpenState = .waitingForUser
         }
     }
 
-    fileprivate func update(_ partitionValue: PartitionValue?, _ configuration: Realm.Configuration) {
-        var open = false
-        if let partitionValue = partitionValue {
-            let bsonValue = AnyBSON(partitionValue: partitionValue)
-            if self.partitionValue != bsonValue {
-                self.partitionValue = bsonValue
-                open = true
-            }
-        }
-
-        // We don't want to use the `defaultConfiguration` from the environment, we only want to use this environment value in @AsyncOpen if is not the default one
-        if configuration != .defaultConfiguration, self.configuration != configuration {
-            if let partitionValue = configuration.syncConfiguration?.partitionValue {
-                self.partitionValue = partitionValue
-            }
-            self.configuration = configuration
-            open = true
-        }
-        if open {
-            self.asyncOpen()
-        }
+    var setupHasRun = false
+    func setup() {
+        guard !setupHasRun else { return }
+        initAsyncOpen()
+        setupHasRun = true
     }
 
-    private func asyncOpen() {
-        if case let .loggedIn(user) = appState {
+    private func initAsyncOpen() {
+        if case .loggedIn(let user) = appState {
+            // we only open the realm on initialisation if there is a user logged.
             asyncOpenForUser(user)
         }
+
+        // we observe the changes in the app state to check for user changes,
+        // we store an internal state, so we could react to those changes (user login, user change, logout).
+        app.objectWillChange.sink { [weak self] app in
+            guard let self = self else { return }
+            switch self.appState {
+            case .loggedIn(let user):
+                if let newUser = app.currentUser,
+                    user != newUser {
+                    self.appState = .loggedIn(newUser)
+                    self.asyncOpenState = .connecting
+                    self.asyncOpenForUser(user)
+                } else if app.currentUser == nil {
+                    self.asyncOpenState = .waitingForUser
+                    self.appState = .loggedOut
+                }
+            case .loggedOut:
+                if let user = app.currentUser {
+                    self.appState = .loggedIn(user)
+                    self.asyncOpenState = .connecting
+                    self.asyncOpenForUser(user)
+                }
+            }
+        }.store(in: &appCancellable)
     }
 
     private func asyncOpenForUser(_ user: User) {
-        asyncOpenState = .connecting
+        let initialSubscriptions = configuration?.syncConfiguration?.initialSubscriptions
 
         // Set the `syncConfiguration` depending if there is partition value (pbs) or not (flx).
         var config: Realm.Configuration
         if let partitionValue = partitionValue {
             config = user.configuration(partitionValue: partitionValue, cancelAsyncOpenOnNonFatalErrors: true)
+        } else if let initialSubscriptions {
+            config = user.flexibleSyncConfiguration(cancelAsyncOpenOnNonFatalErrors: true,
+                                                    initialSubscriptions: ObjectiveCSupport.convert(block: initialSubscriptions.callback),
+                                                    rerunOnOpen: initialSubscriptions.rerunOnOpen)
         } else {
             config = user.flexibleSyncConfiguration(cancelAsyncOpenOnNonFatalErrors: true)
         }
 
         // Use the user configuration by default or set configuration with the current user `syncConfiguration`'s.
         if var configuration = configuration {
+            // We want to throw if the configuration doesn't contain a `SyncConfiguration`
+            guard configuration.syncConfiguration != nil else {
+                throwRealmException("The used configuration was not configured with sync.")
+            }
             let userSyncConfig = config.syncConfiguration
             configuration.syncConfiguration = userSyncConfig
             config = configuration
@@ -1549,6 +1619,23 @@ private class ObservableAsyncOpenStorage: ObservableObject {
             }.store(in: &self.asyncOpenCancellable)
     }
 
+    fileprivate func update(_ partitionValue: PartitionValue?, _ configuration: Realm.Configuration) {
+        if let partitionValue = partitionValue {
+            let bsonValue = AnyBSON(partitionValue: partitionValue)
+            if self.partitionValue != bsonValue {
+                self.partitionValue = bsonValue
+            }
+        }
+
+        // We don't want to use the `defaultConfiguration` from the environment, we only want to use this environment value in @AsyncOpen if is not the default one
+        if configuration != .defaultConfiguration, self.configuration != configuration {
+            if let partitionValue = configuration.syncConfiguration?.partitionValue {
+                self.partitionValue = partitionValue
+            }
+            self.configuration = configuration
+        }
+    }
+
     private func cancelAsyncOpen() {
         asyncOpenCancellable.forEach { $0.cancel() }
         asyncOpenCancellable = []
@@ -1560,39 +1647,9 @@ private class ObservableAsyncOpenStorage: ObservableObject {
         appCancellable = []
     }
 
-    init(asyncOpenKind: AsyncOpenKind, app: App, configuration: Realm.Configuration?, partitionValue: AnyBSON?) {
-        self.asyncOpenKind = asyncOpenKind
-        self.app = app
-        self.configuration = configuration
-        self.partitionValue = partitionValue
-
-        if let user = app.currentUser {
-            appState = .loggedIn(user)
-            asyncOpenForUser(user)
-        } else {
-            appState = .loggedOut
-            asyncOpenState = .waitingForUser
-        }
-        app.objectWillChange.sink { app in
-            switch self.appState {
-            case .loggedIn(let user):
-                if let newUser = app.currentUser,
-                    user != newUser {
-                    self.appState = .loggedIn(newUser)
-                } else if app.currentUser == nil {
-                    self.appState = .loggedOut
-                }
-            case .loggedOut:
-                if let user = app.currentUser {
-                    self.appState = .loggedIn(user)
-                }
-            }
-        }.store(in: &appCancellable)
-    }
-
     // MARK: - AutoOpen & AsyncOpen Helper
 
-    class func configureApp(appId: String? = nil, withTimeout timeout: UInt? = nil) -> App {
+    class func configureApp(appId: String? = nil, timeout: UInt? = nil) -> App {
         var app: App
         if let appId = appId {
             app = App(id: appId)
@@ -1609,10 +1666,8 @@ private class ObservableAsyncOpenStorage: ObservableObject {
         }
 
         // Setup timeout if needed
-        if let timeout = timeout {
-            let syncTimeoutOptions = SyncTimeoutOptions()
-            syncTimeoutOptions.connectTimeout = timeout
-            app.syncManager.timeoutOptions = syncTimeoutOptions
+        if let timeout {
+            app.syncManager.timeoutOptions = SyncTimeoutOptions(connectTimeout: timeout)
         }
         return app
     }
@@ -1668,12 +1723,13 @@ private class ObservableAsyncOpenStorage: ObservableObject {
      A Publisher for `AsyncOpenState`, emits a state each time the asyncOpen state changes.
      */
     public var projectedValue: Published<AsyncOpenState>.Publisher {
-        return storage.$asyncOpenState
+        storage.$asyncOpenState
     }
 
     /// :nodoc:
     public var wrappedValue: AsyncOpenState {
-        storage.asyncOpenState
+        storage.setup()
+        return storage.asyncOpenState
     }
 
     /**
@@ -1691,13 +1747,13 @@ private class ObservableAsyncOpenStorage: ObservableObject {
                  user's sync configuration for the given partition value will be set as the `syncConfiguration`,
                  if empty the user configuration will be used.
      - parameter timeout: The maximum number of milliseconds to allow for a connection to
-     become fully established., if empty or `nil` no connection timeout is set.
+                 become fully established., if empty or `nil` no connection timeout is set.
      */
     public init<Partition>(appId: String? = nil,
                            partitionValue: Partition,
                            configuration: Realm.Configuration? = nil,
                            timeout: UInt? = nil) where Partition: BSON {
-        let app = ObservableAsyncOpenStorage.configureApp(appId: appId, withTimeout: timeout)
+        let app = ObservableAsyncOpenStorage.configureApp(appId: appId, timeout: timeout)
         // Store property wrapper values on the storage
         storage = ObservableAsyncOpenStorage(asyncOpenKind: .asyncOpen, app: app, configuration: configuration, partitionValue: AnyBSON(partitionValue))
     }
@@ -1714,13 +1770,15 @@ private class ObservableAsyncOpenStorage: ObservableObject {
     public init(appId: String? = nil,
                 configuration: Realm.Configuration? = nil,
                 timeout: UInt? = nil) {
-        let app = ObservableAsyncOpenStorage.configureApp(appId: appId, withTimeout: timeout)
+        let app = ObservableAsyncOpenStorage.configureApp(appId: appId, timeout: timeout)
         // Store property wrapper values on the storage
         storage = ObservableAsyncOpenStorage(asyncOpenKind: .asyncOpen, app: app, configuration: configuration, partitionValue: nil)
     }
 
-    public func update() {
-        storage.update(partitionValue, configuration)
+    nonisolated public func update() {
+        assumeOnMainActorExecutor {
+            storage.update(partitionValue, configuration)
+        }
     }
 }
 
@@ -1777,12 +1835,13 @@ private class ObservableAsyncOpenStorage: ObservableObject {
      A Publisher for `AsyncOpenState`, emits a state each time the asyncOpen state changes.
      */
     public var projectedValue: Published<AsyncOpenState>.Publisher {
-        return storage.$asyncOpenState
+        storage.$asyncOpenState
     }
 
     /// :nodoc:
     public var wrappedValue: AsyncOpenState {
-        storage.asyncOpenState
+        storage.setup()
+        return storage.asyncOpenState
     }
 
     /**
@@ -1806,7 +1865,7 @@ private class ObservableAsyncOpenStorage: ObservableObject {
                            partitionValue: Partition,
                            configuration: Realm.Configuration? = nil,
                            timeout: UInt? = nil) where Partition: BSON {
-        let app = ObservableAsyncOpenStorage.configureApp(appId: appId, withTimeout: timeout)
+        let app = ObservableAsyncOpenStorage.configureApp(appId: appId, timeout: timeout)
         // Store property wrapper values on the storage
         storage = ObservableAsyncOpenStorage(asyncOpenKind: .autoOpen, app: app, configuration: configuration, partitionValue: AnyBSON(partitionValue))
     }
@@ -1823,37 +1882,37 @@ private class ObservableAsyncOpenStorage: ObservableObject {
     public init(appId: String? = nil,
                 configuration: Realm.Configuration? = nil,
                 timeout: UInt? = nil) {
-        let app = ObservableAsyncOpenStorage.configureApp(appId: appId, withTimeout: timeout)
+        let app = ObservableAsyncOpenStorage.configureApp(appId: appId, timeout: timeout)
         // Store property wrapper values on the storage
         storage = ObservableAsyncOpenStorage(asyncOpenKind: .autoOpen, app: app, configuration: configuration, partitionValue: nil)
     }
 
-    public func update() {
-        storage.update(partitionValue, configuration)
+    nonisolated public func update() {
+        assumeOnMainActorExecutor {
+            storage.update(partitionValue, configuration)
+        }
     }
 }
 
 @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
 extension SwiftUIKVO {
     @objc(removeObserversFromObject:) static func removeObservers(object: NSObject) -> Bool {
-        if let subscription = SwiftUIKVO.observedObjects[object] {
-            subscription.removeObservers()
-            return true
-        } else {
+        Self.observedObjects.withLock {
+            if let subscription = $0[object] {
+                subscription.removeObservers()
+                return true
+            }
             return false
         }
     }
 
     @objc(addObserversToObject:) static func addObservers(object: NSObject) {
-        if let subscription = SwiftUIKVO.observedObjects[object] {
-            subscription.addObservers()
+        Self.observedObjects.withLock {
+            $0[object]?.addObservers()
         }
     }
 }
 
-// Adding `_Concurrency` flag is the only way to verify
-// if the BASE SDK contains latest framework updates
-#if swift(>=5.5) && canImport(_Concurrency)
 @available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
 extension View {
     /// Marks this view as searchable, which configures the display of a search field.
@@ -2122,7 +2181,7 @@ extension View {
     }
 
     private func filterCollection<T: ObjectBase>(_ collection: ObservedResults<T>, for text: String, on keyPath: KeyPath<T, String>) {
-        DispatchQueue.main.async {
+        assumeOnMainActorExecutor {
             collection.searchText(text, on: keyPath)
         }
     }
@@ -2417,19 +2476,8 @@ extension View {
     }
 
     private func filterCollection<Key, T: ObjectBase>(_ collection: ObservedSectionedResults<Key, T>, for text: String, on keyPath: KeyPath<T, String>) {
-        DispatchQueue.main.async {
+        assumeOnMainActorExecutor {
             collection.searchText(text, on: keyPath)
         }
     }
 }
-#endif
-#else
-@objc(RLMSwiftUIKVO) internal final class SwiftUIKVO: NSObject {
-    @objc(removeObserversFromObject:) public static func removeObservers(object: NSObject) -> Bool {
-        return false
-    }
-
-    @objc(addObserversToObject:) public static func addObservers(object: NSObject) {
-    }
-}
-#endif

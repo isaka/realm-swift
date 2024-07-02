@@ -457,7 +457,7 @@ typedef void (^RLMNotificationBlock)(RLMNotification notification, RLMRealm *rea
 
  KVO observers on any objects which were modified during the transaction will
  be notified about the change back to their initial values, but no other
- notifcations are produced by a cancelled write transaction.
+ notifications are produced by a cancelled write transaction.
 
  @warning This method may only be called during a write transaction.
  */
@@ -578,8 +578,10 @@ typedef void (^RLMNotificationBlock)(RLMNotification notification, RLMRealm *rea
          to cancel the pending invocation of the block. Note that this does
          *not* cancel the commit itself.
 */
-- (RLMAsyncTransactionId)commitAsyncWriteTransaction:(nullable void(^)(NSError *))completionBlock
-                                       allowGrouping:(BOOL)allowGrouping;
+- (RLMAsyncTransactionId)commitAsyncWriteTransaction:(nullable void(^)(NSError *_Nullable))completionBlock
+                                       allowGrouping:(BOOL)allowGrouping
+    __attribute__((swift_async(not_swift_private, 1)))
+    __attribute__((swift_attr("@_unsafeInheritExecutor")));
 
 /**
  Asynchronously commits a write transaction.
@@ -597,7 +599,7 @@ typedef void (^RLMNotificationBlock)(RLMNotification notification, RLMRealm *rea
          to cancel the pending invocation of the block. Note that this does
          *not* cancel the commit itself.
 */
-- (RLMAsyncTransactionId)commitAsyncWriteTransaction:(void(^)(NSError *))completionBlock;
+- (RLMAsyncTransactionId)commitAsyncWriteTransaction:(void(^)(NSError *_Nullable))completionBlock;
 
 /**
  Asynchronously commits a write transaction.
@@ -865,8 +867,6 @@ NS_REFINED_FOR_SWIFT;
  Represents the active subscriptions for this realm, which can be used to add/remove/update
  and search flexible sync subscriptions.
  Getting the subscriptions from a local or partition-based configured realm will thrown an exception.
-
- @warning This feature is currently in beta and its API is subject to change.
  */
 @property (nonatomic, readonly, nonnull) RLMSyncSubscriptionSet *subscriptions;
 
@@ -882,6 +882,7 @@ NS_REFINED_FOR_SWIFT;
 
  @param oldSchemaVersion    The schema version of the Realm being migrated.
  */
+RLM_SWIFT_SENDABLE
 typedef void (^RLMMigrationBlock)(RLMMigration *migration, uint64_t oldSchemaVersion);
 
 /**
@@ -895,7 +896,8 @@ typedef void (^RLMMigrationBlock)(RLMMigration *migration, uint64_t oldSchemaVer
 
  @return The version of the Realm at `fileURL`, or `RLMNotVersioned` if the version cannot be read.
  */
-+ (uint64_t)schemaVersionAtURL:(NSURL *)fileURL encryptionKey:(nullable NSData *)key error:(NSError **)error
++ (uint64_t)schemaVersionAtURL:(NSURL *)fileURL encryptionKey:(nullable NSData *)key
+                         error:(NSError **)error
 NS_REFINED_FOR_SWIFT;
 
 /**
@@ -946,10 +948,12 @@ NS_REFINED_FOR_SWIFT;
  When you wish to stop, call the `-invalidate` method. Notifications are also stopped if
  the token is deallocated.
  */
-RLM_SWIFT_SENDABLE
+RLM_SWIFT_SENDABLE // is internally thread-safe
 @interface RLMNotificationToken : NSObject
 /// Stops notifications for the change subscription that returned this token.
-- (void)invalidate;
+///
+/// @return True if the token was previously valid, and false if it was already invalidated.
+- (bool)invalidate;
 
 /// Stops notifications for the change subscription that returned this token.
 - (void)stop __attribute__((unavailable("Renamed to -invalidate."))) NS_REFINED_FOR_SWIFT;

@@ -18,15 +18,14 @@
 
 #import <Realm/Realm.h>
 
-RLM_HEADER_AUDIT_BEGIN(nullability, sendability)
+RLM_HEADER_AUDIT_BEGIN(nullability)
 
 @interface RLMUser (ObjectServerTests)
-
-- (BOOL)waitForUploadToFinish:(NSString *)partitionValue;
-- (BOOL)waitForDownloadToFinish:(NSString *)partitionValue;
-
 - (void)simulateClientResetErrorForSession:(NSString *)partitionValue;
-
 @end
 
-RLM_HEADER_AUDIT_END(nullability, sendability)
+@interface RLMSyncSession (ObjectServerTests)
++ (dispatch_queue_t)notificationsQueue;
+@end
+
+RLM_HEADER_AUDIT_END(nullability)

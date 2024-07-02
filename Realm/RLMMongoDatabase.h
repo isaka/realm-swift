@@ -34,6 +34,7 @@ RLM_HEADER_AUDIT_BEGIN(nullability, sendability)
 ///
 /// - SeeAlso:
 /// `RLMMongoClient`, `RLMMongoCollection`
+RLM_SWIFT_SENDABLE RLM_FINAL // immutable final class
 @interface RLMMongoDatabase : NSObject
 
 /// The name of this database
@@ -43,6 +44,7 @@ RLM_HEADER_AUDIT_BEGIN(nullability, sendability)
 /// @param name The name of the collection to return
 /// @returns The collection
 - (RLMMongoCollection *)collectionWithName:(NSString *)name;
+// NEXT-MAJOR: NS_SWIFT_NAME(collection(named:))
 
 @end
 

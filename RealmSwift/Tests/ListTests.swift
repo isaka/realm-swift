@@ -19,7 +19,11 @@
 import XCTest
 import RealmSwift
 
-class ListTests: TestCase {
+#if canImport(RealmSwiftTestSupport)
+import RealmSwiftTestSupport
+#endif
+
+class ListTests: TestCase, @unchecked Sendable {
     var str1: SwiftStringObject?
     var str2: SwiftStringObject?
     var arrayObject: SwiftArrayPropertyObject!
@@ -342,7 +346,7 @@ class ListTests: TestCase {
         XCTAssertEqual(array[1].stringCol, "3")
         XCTAssertEqual(array[2].stringCol, "2")
 
-        array.move(fromOffsets: IndexSet([0]), toOffset: 0)
+        array.move(fromOffsets: IndexSet([0]), toOffset: 1)
         // [1, 3, 2]
         XCTAssertEqual(array[0].stringCol, "1")
         XCTAssertEqual(array[1].stringCol, "3")
@@ -364,10 +368,10 @@ class ListTests: TestCase {
         XCTAssertEqual(array[2].stringCol, "3")
 
         array.move(fromOffsets: IndexSet([0, 2]), toOffset: 1)
-        // [2, 3, 1]
-        XCTAssertEqual(array[0].stringCol, "2")
+        // [1, 3, 2]
+        XCTAssertEqual(array[0].stringCol, "1")
         XCTAssertEqual(array[1].stringCol, "3")
-        XCTAssertEqual(array[2].stringCol, "1")
+        XCTAssertEqual(array[2].stringCol, "2")
     }
 
     func testReplaceRange() {
@@ -657,7 +661,7 @@ class ListTests: TestCase {
     }
 }
 
-class ListStandaloneTests: ListTests {
+class ListStandaloneTests: ListTests, @unchecked Sendable {
     override func createArray() -> SwiftArrayPropertyObject {
         let array = SwiftArrayPropertyObject()
         XCTAssertNil(array.realm)
@@ -675,7 +679,7 @@ class ListStandaloneTests: ListTests {
     }
 }
 
-class ListNewlyAddedTests: ListTests {
+class ListNewlyAddedTests: ListTests, @unchecked Sendable {
     override func createArray() -> SwiftArrayPropertyObject {
         let array = SwiftArrayPropertyObject()
         array.name = "name"
@@ -704,11 +708,11 @@ class ListNewlyAddedTests: ListTests {
     }
 }
 
-class ListNewlyCreatedTests: ListTests {
+class ListNewlyCreatedTests: ListTests, @unchecked Sendable {
     override func createArray() -> SwiftArrayPropertyObject {
         let realm = realmWithTestPath()
         realm.beginWrite()
-        let array = realm.create(SwiftArrayPropertyObject.self, value: ["name", [], []])
+        let array = realm.create(SwiftArrayPropertyObject.self, value: ["name"])
         try! realm.commitWrite()
 
         XCTAssertNotNil(array.realm)
@@ -728,16 +732,16 @@ class ListNewlyCreatedTests: ListTests {
     override func createEmbeddedArray() -> List<EmbeddedTreeObject1> {
         let realm = try! Realm()
         return try! realm.write {
-            realm.create(EmbeddedParentObject.self, value: []).array
+            realm.create(EmbeddedParentObject.self).array
         }
     }
 }
 
-class ListRetrievedTests: ListTests {
+class ListRetrievedTests: ListTests, @unchecked Sendable {
     override func createArray() -> SwiftArrayPropertyObject {
         let realm = realmWithTestPath()
         realm.beginWrite()
-        realm.create(SwiftArrayPropertyObject.self, value: ["name", [], []])
+        realm.create(SwiftArrayPropertyObject.self, value: ["name"])
         try! realm.commitWrite()
         let array = realm.objects(SwiftArrayPropertyObject.self).first!
 
@@ -759,14 +763,14 @@ class ListRetrievedTests: ListTests {
     override func createEmbeddedArray() -> List<EmbeddedTreeObject1> {
         let realm = try! Realm()
         try! realm.write {
-            realm.create(EmbeddedParentObject.self, value: [])
+            realm.create(EmbeddedParentObject.self)
         }
         return realm.objects(EmbeddedParentObject.self).first!.array
     }
 }
 
 /// Ensure the range replaceable collection methods behave correctly when emulated for Swift 4 and later.
-class ListRRCMethodsTests: TestCase {
+class ListRRCMethodsTests: TestCase, @unchecked Sendable {
     private func compare(array: [Int], with list: List<SwiftIntObject>) {
         guard array.count == list.count else {
             XCTFail("Array and list have different sizes (\(array.count) and \(list.count), respectively).")

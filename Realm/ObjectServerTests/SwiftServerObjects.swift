@@ -33,6 +33,20 @@ public class SwiftPerson: Object {
     }
 }
 
+public class SwiftPersonWithAdditionalProperty: SwiftPerson {
+    @Persisted public var newProperty: Int
+
+    public override class func _realmIgnoreClass() -> Bool {
+        true
+    }
+    public override class func _realmObjectName() -> String {
+        "SwiftPerson"
+    }
+    public override class func className() -> String {
+        "SwiftPersonWithAdditionalProperty"
+    }
+}
+
 public class LinkToSwiftPerson: Object {
     @Persisted(primaryKey: true) public var _id: ObjectId
     @Persisted public var person: SwiftPerson?
@@ -40,7 +54,7 @@ public class LinkToSwiftPerson: Object {
     @Persisted public var peopleByName: Map<String, SwiftPerson?>
 }
 
-@available(OSX 10.15, watchOS 6.0, iOS 13.0, iOSApplicationExtension 13.0, OSXApplicationExtension 10.15, tvOS 13.0, *)
+@available(macOS 10.15, *)
 extension SwiftPerson: ObjectKeyIdentifiable {}
 
 public class SwiftTypesSyncObject: Object {
@@ -49,7 +63,7 @@ public class SwiftTypesSyncObject: Object {
     @Persisted public var intCol: Int = 1
     @Persisted public var doubleCol: Double = 1.1
     @Persisted public var stringCol: String = "string"
-    @Persisted public var binaryCol: Data = "string".data(using: String.Encoding.utf8)!
+    @Persisted public var binaryCol: Data = Data("string".utf8)
     @Persisted public var dateCol: Date = Date(timeIntervalSince1970: -1)
     @Persisted public var longCol: Int64 = 1
     @Persisted public var decimalCol: Decimal128 = Decimal128(1)
@@ -166,10 +180,12 @@ public class SwiftIntPrimaryKeyObject: Object {
 public class SwiftHugeSyncObject: Object {
     @Persisted(primaryKey: true) public var _id: ObjectId
     @Persisted public var data: Data?
+    @Persisted public var partition: String
 
-    public class func create() -> SwiftHugeSyncObject {
+    public class func create(key: String = "") -> SwiftHugeSyncObject {
         let fakeDataSize = 1000000
-        return SwiftHugeSyncObject(value: ["data": Data(repeating: 16, count: fakeDataSize)])
+        return SwiftHugeSyncObject(value: ["data": Data(repeating: 16, count: fakeDataSize),
+                                           "partition": key])
     }
 }
 
@@ -192,7 +208,7 @@ public class SwiftCustomColumnObject: Object {
     @Persisted public var intCol: Int = 1
     @Persisted public var doubleCol: Double = 1.1
     @Persisted public var stringCol: String = "string"
-    @Persisted public var binaryCol = "string".data(using: String.Encoding.utf8)!
+    @Persisted public var binaryCol = Data("string".utf8)
     @Persisted public var dateCol: Date = Date(timeIntervalSince1970: -1)
     @Persisted public var longCol: Int64 = 1
     @Persisted public var decimalCol: Decimal128 = Decimal128(1)

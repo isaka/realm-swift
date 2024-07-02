@@ -19,7 +19,7 @@
 import XCTest
 import RealmSwift
 
-class MutableSetTests: TestCase {
+class MutableSetTests: TestCase, @unchecked Sendable {
     var str1: SwiftStringObject?
     var str2: SwiftStringObject?
     var str3: SwiftStringObject?
@@ -485,7 +485,7 @@ class MutableSetTests: TestCase {
     }
 }
 
-class MutableSetStandaloneTests: MutableSetTests {
+class MutableSetStandaloneTests: MutableSetTests, @unchecked Sendable {
     override func createSet() -> SwiftMutableSetPropertyObject {
         let set = SwiftMutableSetPropertyObject()
         XCTAssertNil(set.realm)
@@ -499,7 +499,7 @@ class MutableSetStandaloneTests: MutableSetTests {
     }
 }
 
-class MutableSetNewlyAddedTests: MutableSetTests {
+class MutableSetNewlyAddedTests: MutableSetTests, @unchecked Sendable {
     override func createSet() -> SwiftMutableSetPropertyObject {
         let set = SwiftMutableSetPropertyObject()
         set.name = "name"
@@ -520,11 +520,11 @@ class MutableSetNewlyAddedTests: MutableSetTests {
     }
 }
 
-class MutableSetNewlyCreatedTests: MutableSetTests {
+class MutableSetNewlyCreatedTests: MutableSetTests, @unchecked Sendable {
     override func createSet() -> SwiftMutableSetPropertyObject {
         let realm = realmWithTestPath()
         realm.beginWrite()
-        let set = realm.create(SwiftMutableSetPropertyObject.self, value: ["name", [], []])
+        let set = realm.create(SwiftMutableSetPropertyObject.self, value: ["name"])
         try! realm.commitWrite()
 
         XCTAssertNotNil(set.realm)
@@ -542,11 +542,11 @@ class MutableSetNewlyCreatedTests: MutableSetTests {
     }
 }
 
-class MutableSetRetrievedTests: MutableSetTests {
+class MutableSetRetrievedTests: MutableSetTests, @unchecked Sendable {
     override func createSet() -> SwiftMutableSetPropertyObject {
         let realm = realmWithTestPath()
         realm.beginWrite()
-        realm.create(SwiftMutableSetPropertyObject.self, value: ["name", [], []])
+        realm.create(SwiftMutableSetPropertyObject.self, value: ["name"])
         try! realm.commitWrite()
         let set = realm.objects(SwiftMutableSetPropertyObject.self).last!
 

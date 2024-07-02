@@ -31,9 +31,7 @@ import Realm.Private
  is opened as read-only.
 
  MutableSet's can be filtered and sorted with the same predicates as `Results<Element>`.
-
- Properties of `MutableSet` type defined on `Object` subclasses must be declared as `let` and cannot be `dynamic`.
- */
+*/
 public final class MutableSet<Element: RealmCollectionValue>: RLMSwiftCollectionBase, RealmCollectionImpl {
     internal var lastAccessedNames: NSMutableArray?
 
@@ -188,7 +186,7 @@ public final class MutableSet<Element: RealmCollectionValue>: RLMSwiftCollection
         rlmSet.union(other.rlmSet)
     }
 
-    @objc class func _unmanagedCollection() -> RLMSet<AnyObject> {
+    @objc static func _unmanagedCollection() -> RLMSet<AnyObject> {
         if let type = Element.self as? ObjectBase.Type {
             return RLMSet(objectClassName: type.className())
         }
@@ -199,8 +197,8 @@ public final class MutableSet<Element: RealmCollectionValue>: RLMSwiftCollection
     }
 
     /// :nodoc:
-    @objc public override class func _backingCollectionType() -> AnyClass {
-        return RLMManagedSet.self
+    @objc public override static func _backingCollectionType() -> AnyClass {
+        RLMManagedSet.self
     }
 
     // Printable requires a description property defined in Swift (and not obj-c),

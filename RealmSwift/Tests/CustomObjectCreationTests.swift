@@ -36,7 +36,7 @@ private func objectWrapperValues() -> [EmbeddedObjectWrapper] {
     return objectValues().map(EmbeddedObjectWrapper.init)
 }
 
-class CustomObjectCreationTests: TestCase {
+class CustomObjectCreationTests: TestCase, @unchecked Sendable {
     var rawValues: [String: Any]!
     var wrappedValues: [String: Any]!
     var nilOptionalValues: [String: Any]!
@@ -809,7 +809,7 @@ class CustomObjectCreationTests: TestCase {
     }
 
     func testInitFailable() {
-        _ = FailableCustomObject(value: [])
+        _ = FailableCustomObject()
         assertThrows(FailableCustomObject(value: ["int": 1]), reason: "Could not convert value '1' to type 'IntFailableWrapper'.")
 
         let obj = FailableCustomObject(value: ["optInt": 1,

@@ -19,7 +19,7 @@
 import XCTest
 import RealmSwift
 
-class SchemaTests: TestCase {
+class SchemaTests: TestCase, @unchecked Sendable {
     var schema: Schema!
 
     override func setUp() {
@@ -54,5 +54,14 @@ class SchemaTests: TestCase {
         XCTAssertNil(schema["Object"])
         XCTAssertNil(schema["DynamicObject"])
         XCTAssertNil(schema["MigrationObject"])
+    }
+
+    func testValidNestedClass() throws {
+        let privateSubclass = try XCTUnwrap(schema["PrivateObjectSubclass"])
+        XCTAssertEqual(privateSubclass.className, "PrivateObjectSubclass")
+
+        let parent = try XCTUnwrap(schema["ObjectWithNestedEmbeddedObject"])
+        XCTAssertEqual(parent.properties[1].objectClassName, "ObjectWithNestedEmbeddedObject_NestedInnerClass")
+        XCTAssertNotNil(schema["ObjectWithNestedEmbeddedObject_NestedInnerClass"])
     }
 }
