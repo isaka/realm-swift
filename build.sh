@@ -289,6 +289,7 @@ create_xcframework() {
     find "$ROOT_WORKSPACE" -path "*/$config*/$product.framework" \
         | sed 's/.*/-framework &/' \
         | xargs xcodebuild -create-xcframework -allow-internal-distribution -output "$out_path"
+    codesign --timestamp -s "$SIGNING_IDENTITY" "$out_path"
 }
 
 # Artifacts are zipped by the artifacts store so they're endup nested zipped, so we need to unzip this zip.
@@ -1135,6 +1136,27 @@ case "$COMMAND" in
         exit 0
         ;;
 
+    "install-apple-certificates")
+        # create variables
+        CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+        KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+        # import certificate and provisioning profile from secrets
+        echo "$DEVELOPMENT_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+
+        # create temporary keychain
+        security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+        security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+        # import certificate to keychain
+        security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+        security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+        security list-keychain -d user -s $KEYCHAIN_PATH
+
+        exit 0
+        ;;
+
     ######################################
     # Release tests
     ######################################
@@ -1345,7 +1367,7 @@ x.y.z Release notes (yyyy-MM-dd)
 * APIs are backwards compatible with all previous releases in the 10.x.y series.
 * Carthage release for Swift is built with Xcode 15.4.0.
 * CocoaPods: 1.10 or later.
-* Xcode: 15.1.0-15.4.0.
+* Xcode: 15.1.0-16 beta 4.
 
 ### Internal
 * Upgraded realm-core from ? to ?
