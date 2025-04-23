@@ -369,10 +369,6 @@ static NSURL *syncDirectoryForChildProcess() {
     return [RLMCredentials credentialsWithJWT:[self createJWTWithAppId:appId]];
 }
 
-- (void)waitForDownloadsForRealm:(RLMRealm *)realm {
-    [self waitForDownloadsForRealm:realm error:nil];
-}
-
 - (void)waitForUploadsForRealm:(RLMRealm *)realm {
     [self waitForUploadsForRealm:realm error:nil];
 }
@@ -392,11 +388,9 @@ static NSURL *syncDirectoryForChildProcess() {
         return;
     }
     [self waitForExpectations:@[ex] timeout:60.0];
-    if (error)
-        *error = completionError;
 }
 
-- (void)waitForDownloadsForRealm:(RLMRealm *)realm error:(NSError **)error {
+- (void)waitForDownloadsForRealm:(RLMRealm *)realm {
     RLMSyncSession *session = realm.syncSession;
     NSAssert(session, @"Cannot call with invalid Realm");
     XCTestExpectation *ex = [self expectationWithDescription:@"Wait for download completion"];
@@ -411,9 +405,6 @@ static NSURL *syncDirectoryForChildProcess() {
         return;
     }
     [self waitForExpectations:@[ex] timeout:60.0];
-    if (error) {
-        *error = completionError;
-    }
     [realm refresh];
 }
 
@@ -613,7 +604,7 @@ static bool s_opensApp;
     RLMApp *app = [RLMApp appWithConfiguration:config];
     RLMSyncManager *syncManager = app.syncManager;
     syncManager.userAgent = self.name;
-    [RLMLogger setLevel:RLMLogLevelWarn forCategory:RLMLogCategorySync];
+    RLMLogger.defaultLogger.level = RLMLogLevelWarn;
     return app;
 }
 

@@ -23,7 +23,6 @@
 #endif
 import Foundation
 import Realm
-import Realm.Private
 import XCTest
 
 #if canImport(RealmSwiftTestSupport)
@@ -843,6 +842,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertFalse(notificationCalled)
     }
 
+    @MainActor
     func testAutorefresh() {
         let realm = try! Realm()
         XCTAssertTrue(realm.autorefresh, "Autorefresh should default to true")
@@ -859,7 +859,7 @@ class RealmTests: TestCase, @unchecked Sendable {
             notificationFired.fulfill()
         }
 
-        dispatchSyncNewThread {
+        dispatchSyncNewThread { @Sendable in
             let realm = try! Realm()
             try! realm.write {
                 realm.create(SwiftStringObject.self, value: ["string"])
@@ -874,6 +874,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertEqual(results[0].stringCol, "string", "Value of first column should be 'string'")
     }
 
+    @MainActor
     func testRefresh() {
         let realm = try! Realm()
         realm.autorefresh = false
@@ -891,7 +892,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         let results = realm.objects(SwiftStringObject.self)
         XCTAssertEqual(results.count, Int(0), "There should be 1 object of type StringObject")
 
-        dispatchSyncNewThread {
+        dispatchSyncNewThread { @Sendable in
             try! Realm().write {
                 _ = try! Realm().create(SwiftStringObject.self, value: ["string"])
             }
@@ -1021,7 +1022,7 @@ class RealmTests: TestCase, @unchecked Sendable {
     }
 
     func testEquals() {
-        let realm = try! Realm()
+        nonisolated(unsafe) let realm = try! Realm()
         XCTAssertTrue(try! realm == Realm())
 
         let testRealm = realmWithTestPath()
@@ -1064,7 +1065,7 @@ class RealmTests: TestCase, @unchecked Sendable {
     func testThaw() {
         XCTAssertEqual(try! Realm().objects(SwiftBoolObject.self).count, 0)
         let realm = try! Realm()
-        let frozenRealm = realm.freeze()
+        nonisolated(unsafe) let frozenRealm = realm.freeze()
         XCTAssert(frozenRealm.isFrozen)
 
         dispatchSyncNewThread {
@@ -1081,6 +1082,7 @@ class RealmTests: TestCase, @unchecked Sendable {
 
     // MARK: - Async Transactions
 
+    @MainActor
     func testAsyncTransactionShouldWrite() {
         let realm = try! Realm()
         let asyncComplete = expectation(description: "async transaction complete")
@@ -1096,6 +1098,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         waitForExpectations(timeout: 1, handler: nil)
     }
 
+    @MainActor
     func testAsyncTransactionShouldWriteOnCommit() {
         let realm = try! Realm()
         let writeComplete = expectation(description: "async transaction complete")
@@ -1117,6 +1120,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertEqual(realm.objects(SwiftStringObject.self).count, 1)
     }
 
+    @MainActor
     func testAsyncTransactionShouldCancel() {
         let realm = try! Realm()
         let asyncComplete = expectation(description: "async transaction complete")
@@ -1135,6 +1139,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertNil(realm.objects(SwiftStringObject.self).first)
     }
 
+    @MainActor
     func testAsyncTransactionShouldCancelWithoutCommit() {
         let realm = try! Realm()
         let asyncComplete = expectation(description: "async transaction complete")
@@ -1150,6 +1155,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertNil(realm.objects(SwiftStringObject.self).first)
     }
 
+    @MainActor
     func testAsyncTransactionShouldNotAutoCommitOnCanceledTransaction() {
         let realm = try! Realm()
         let waitComplete = expectation(description: "async wait complete")
@@ -1171,6 +1177,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertNil(realm.objects(SwiftStringObject.self).first)
     }
 
+    @MainActor
     func testAsyncTransactionShouldAutorefresh() {
         let realm = try! Realm()
         realm.autorefresh = false
@@ -1202,6 +1209,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertEqual(results[0].stringCol, "string")
     }
 
+    @MainActor
     func testAsyncTransactionSyncCommit() {
         let realm = try! Realm()
         let asyncComplete = expectation(description: "async transaction complete")
@@ -1223,6 +1231,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertEqual(2, realm.objects(SwiftStringObject.self).count)
     }
 
+    @MainActor
     func testAsyncTransactionSyncAfterAsyncWithoutCommit() {
         let realm = try! Realm()
         XCTAssertEqual(0, realm.objects(SwiftStringObject.self).count)
@@ -1242,6 +1251,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertEqual("string 2", realm.objects(SwiftStringObject.self).first?.stringCol)
     }
 
+    @MainActor
     func testAsyncTransactionWriteWithSync() {
         let realm = try! Realm()
         let asyncComplete = expectation(description: "async transaction complete")
@@ -1262,6 +1272,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertEqual(2, realm.objects(SwiftStringObject.self).count)
     }
 
+    @MainActor
     func testAsyncTransactionMixedWithSync() {
         let realm = try! Realm()
         let asyncComplete = expectation(description: "async transaction complete")
@@ -1286,6 +1297,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertEqual(3, realm.objects(SwiftStringObject.self).count)
     }
 
+    @MainActor
     func testAsyncTransactionMixedWithCancelledSync() {
         let realm = try! Realm()
         let asyncComplete = expectation(description: "async transaction complete")
@@ -1310,6 +1322,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertEqual(2, realm.objects(SwiftStringObject.self).count)
     }
 
+    @MainActor
     func testAsyncTransactionChangeNotification() {
         let realm = try! Realm()
         let asyncWriteComplete = expectation(description: "async write complete")
@@ -1346,6 +1359,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         token.invalidate()
     }
 
+    @MainActor
     func testBeginAsyncTransactionInAsyncTransaction() {
         let realm = try! Realm()
         let transaction1 = expectation(description: "async transaction 1 complete")
@@ -1370,6 +1384,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertEqual(2, realm.objects(SwiftStringObject.self).count)
     }
 
+    @MainActor
     func testAsyncTransactionFromSyncTransaction() {
         let realm = try! Realm()
         let transaction1 = expectation(description: "async transaction 1 complete")
@@ -1426,6 +1441,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertEqual(2, realm.objects(SwiftStringObject.self).count)
     }
 
+    @MainActor
     func testAsyncTransactionCommit() {
         let realm = try! Realm()
         let changesAddedExpectation = expectation(description: "testAsyncTransactionCommit expectation")
@@ -1451,6 +1467,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertEqual(1, realm.objects(SwiftStringObject.self).count)
     }
 
+    @MainActor
     func testAsyncTransactionShouldWriteObjectFromOutsideOfTransaction() {
         let realm = try! Realm()
         let asyncComplete = expectation(description: "async transaction complete")
@@ -1469,6 +1486,7 @@ class RealmTests: TestCase, @unchecked Sendable {
         XCTAssertNotNil(realm.objects(SwiftStringObject.self).first { $0.stringCol == "string I" })
     }
 
+    @MainActor
     func testAsyncTransactionShouldChangeExistingObject() {
         let realm = try! Realm()
         let asyncComplete = expectation(description: "async transaction complete")
@@ -1498,7 +1516,7 @@ extension RealmTests {
         let realm = try await Realm(downloadBeforeOpen: .always)
         _ = try await Realm(downloadBeforeOpen: .always)
         _ = try await Task { @CustomGlobalActor in
-            _ = try await Realm(actor: CustomGlobalActor.shared, downloadBeforeOpen: .always)
+            _ = try await openRealm(actor: CustomGlobalActor.shared, downloadBeforeOpen: .always)
         }.value
         realm.invalidate()
     }
@@ -1514,7 +1532,7 @@ extension RealmTests {
 
     @MainActor
     func testAsyncRefresh() async throws {
-        let realm = try await Realm(actor: MainActor.shared)
+        let realm = try await openRealm(actor: MainActor.shared)
         realm.autorefresh = false
 
         let results = realm.objects(SwiftStringObject.self)
@@ -1523,7 +1541,7 @@ extension RealmTests {
         XCTAssertFalse(didRefresh)
 
         try await Task { @CustomGlobalActor in
-            let realm = try await Realm(actor: CustomGlobalActor.shared)
+            let realm = try await openRealm(actor: CustomGlobalActor.shared)
             try! realm.write {
                 _ = realm.create(SwiftStringObject.self, value: ["string"])
             }
@@ -1685,7 +1703,7 @@ extension RealmTests {
 
     @MainActor
     func testAsyncWriteBasics() async throws {
-        let realm = try await Realm(actor: MainActor.shared)
+        let realm = try await openRealm(actor: MainActor.shared)
         let obj = try await realm.asyncWrite {
             XCTAssertTrue(realm.isInWriteTransaction)
             XCTAssertTrue(realm.isPerformingAsynchronousWriteOperations)
@@ -1699,7 +1717,7 @@ extension RealmTests {
 
     @MainActor
     func testAsyncWriteCancel() async throws {
-        let realm = try await Realm(actor: MainActor.shared)
+        let realm = try await openRealm(actor: MainActor.shared)
         try await realm.asyncWrite {
             realm.create(SwiftStringObject.self, value: ["foo"])
             realm.cancelWrite()
@@ -1710,7 +1728,7 @@ extension RealmTests {
 
     @MainActor
     func testAsyncWriteBeginNewWriteAfterCancel() async throws {
-        let realm = try await Realm(actor: MainActor.shared)
+        let realm = try await openRealm(actor: MainActor.shared)
         try await realm.asyncWrite {
             realm.create(SwiftStringObject.self, value: ["foo"])
             realm.cancelWrite()
@@ -1724,7 +1742,7 @@ extension RealmTests {
 
     @MainActor
     func testAsyncWriteModifyExistingObject() async throws {
-        let realm = try await Realm(actor: MainActor.shared)
+        let realm = try await openRealm(actor: MainActor.shared)
         let obj = try await realm.asyncWrite {
             realm.create(SwiftStringObject.self, value: ["foo"])
         }
@@ -1736,7 +1754,7 @@ extension RealmTests {
 
     @MainActor
     func testAsyncWriteCancelsOnThrow() async throws {
-        let realm = try await Realm(actor: MainActor.shared)
+        let realm = try await openRealm(actor: MainActor.shared)
 
         await assertThrowsErrorAsync(try await realm.asyncWrite {
             realm.create(SwiftStringObject.self, value: ["foo"])
@@ -1754,7 +1772,7 @@ extension RealmTests {
 
     @CustomGlobalActor
     func testAsyncWriteCustomGlobalActor() async throws {
-        let realm = try await Realm(actor: CustomGlobalActor.shared)
+        let realm = try await openRealm(actor: CustomGlobalActor.shared)
         let obj = try await realm.asyncWrite {
             realm.create(SwiftStringObject.self, value: ["foo"])
         }
@@ -1771,7 +1789,7 @@ extension RealmTests {
             var realm: Realm!
             var obj: SwiftStringObject?
             init() async throws {
-                realm = try await Realm(actor: self)
+                realm = try await openRealm(actor: self)
             }
 
             var count: Int {
@@ -1820,12 +1838,12 @@ extension RealmTests {
 
     @MainActor
     func testAsyncWriteTaskCancellation() async throws {
-        let realm = try await Realm(actor: MainActor.shared)
+        let realm = try await openRealm(actor: MainActor.shared)
         realm.beginWrite()
 
         let ex = expectation(description: "Background thread ready")
         let task = Task { @CustomGlobalActor in
-            let realm = try await Realm(actor: CustomGlobalActor.shared)
+            let realm = try await openRealm(actor: CustomGlobalActor.shared)
             ex.fulfill()
             try await realm.asyncWrite {
                 XCTFail("Should not have been called")
@@ -1843,12 +1861,12 @@ extension RealmTests {
 
     @MainActor
     func testAsyncWriteTaskCancelledBeforeWriteCalled() async throws {
-        let realm = try await Realm(actor: MainActor.shared)
+        let realm = try await openRealm(actor: MainActor.shared)
         realm.beginWrite()
 
         let ex = expectation(description: "Background thread ready")
         let task = Task { @CustomGlobalActor in
-            let realm = try await Realm(actor: CustomGlobalActor.shared)
+            let realm = try await openRealm(actor: CustomGlobalActor.shared)
             ex.fulfill()
             // Block until cancelWrite() is called, ensuring that the Task is
             // cancelled before the call to asyncWrite
@@ -1868,7 +1886,7 @@ extension RealmTests {
     // FIXME: deadlocks without https://github.com/realm/realm-core/pull/6413
     @MainActor
     func skip_testAsyncWriteTaskCancellationTiming() async throws {
-        let realm = try await Realm(actor: MainActor.shared)
+        let realm = try await openRealm(actor: MainActor.shared)
         realm.beginWrite()
 
         // Try to hit the timing windows which can't be deterministically tested
@@ -1877,7 +1895,7 @@ extension RealmTests {
         for _ in 0..<1000 {
             let ex = expectation(description: "Background thread ready")
             let task = Task { @CustomGlobalActor in
-                let realm = try await Realm(actor: CustomGlobalActor.shared)
+                let realm = try await openRealm(actor: CustomGlobalActor.shared)
                 // Tearing down a Realm which is in the middle of async writes
                 // is itself async, so we need to explicitly wait for that to
                 // happen or we'll hit a data race when we try to close all
@@ -1954,239 +1972,66 @@ class LoggerTests: TestCase, @unchecked Sendable {
     override func tearDown() {
         Logger.shared = logger
     }
-
     func testSetDefaultLogLevel() throws {
-        let logs = Locked("")
-        let logger = Logger(function: { level, category, message in
-            logs.withLock({ $0 += "\(Date.now)  \(category.rawValue):\(level.logLevel) \(message)" })
-        })
+        nonisolated(unsafe) var logs: String = ""
+        let logger = Logger(level: .off) { level, message in
+            logs += "\(Date.now) \(level.logLevel) \(message)"
+        }
         Logger.shared = logger
-        Logger.setLogLevel(.off, for: Category.realm)
 
         try autoreleasepool { _ = try Realm() }
-        XCTAssertTrue(logs.value.isEmpty)
+        XCTAssertTrue(logs.isEmpty)
 
-        Logger.setLogLevel(.all, for: Category.realm)
+        logger.level = .all
         try autoreleasepool { _ = try Realm() } // We should be getting logs after changing the log level
-        XCTAssertEqual(Logger.logLevel(for: Category.realm), .all)
-        XCTAssertTrue(logs.value.contains("Details DB:"))
-        XCTAssertTrue(logs.value.contains("Trace DB:"))
+        XCTAssertEqual(Logger.shared.level, .all)
+        XCTAssertTrue(logs.contains("Details DB:"))
+        XCTAssertTrue(logs.contains("Trace DB:"))
     }
 
-    func testSetDefaultLogger() throws {
-        let logs = Locked("")
-        let logger = Logger(function: { level, category, message in
-            logs.withLock({ $0 += "\(Date.now)  \(category.rawValue):\(level.logLevel) \(message)" })
-        })
+    func testDefaultLogger() throws {
+        nonisolated(unsafe) var logs: String = ""
+        let logger = Logger(level: .off) { level, message in
+            logs += "\(Date.now) \(level.logLevel) \(message)"
+        }
         Logger.shared = logger
-        Logger.setLogLevel(.off, for: Category.realm)
-        XCTAssertEqual(Logger.logLevel(for: Category.realm), .off)
+
+        XCTAssertEqual(Logger.shared.level, .off)
         try autoreleasepool { _ = try Realm() }
-        XCTAssertTrue(logs.value.isEmpty)
+        XCTAssertTrue(logs.isEmpty)
 
         // Info
-        Logger.setLogLevel(.detail, for: Category.realm)
+        logger.level = .detail
         try autoreleasepool { _ = try Realm() }
 
-        XCTAssertTrue(!logs.value.isEmpty)
-        XCTAssertTrue(logs.value.contains("Details DB:"))
+        XCTAssertTrue(!logs.isEmpty)
+        XCTAssertTrue(logs.contains("Details DB:"))
 
         // Trace
-        logs.wrappedValue = ""
-        Logger.setLogLevel(.trace, for: Category.realm)
+        logs = ""
+        logger.level = .trace
         try autoreleasepool { _ = try Realm() }
 
-        XCTAssertTrue(!logs.value.isEmpty)
-        XCTAssertTrue(logs.value.contains("Trace DB:"))
+        XCTAssertTrue(!logs.isEmpty)
+        XCTAssertTrue(logs.contains("Trace DB:"))
 
         // Detail
-        logs.wrappedValue = ""
-        Logger.setLogLevel(.detail, for: Category.realm)
+        logs = ""
+        logger.level = .detail
         try autoreleasepool { _ = try Realm() }
 
-        XCTAssertTrue(!logs.value.isEmpty)
-        XCTAssertTrue(logs.value.contains("Details DB:"))
-        XCTAssertFalse(logs.value.contains("Trace DB:"))
+        XCTAssertTrue(!logs.isEmpty)
+        XCTAssertTrue(logs.contains("Details DB:"))
+        XCTAssertFalse(logs.contains("Trace DB:"))
 
-        logs.wrappedValue = ""
-        Logger.shared = Logger(function: { level, _, message in
-            logs.withLock({ $0 += "\(Date.now) \(level.logLevel) \(message)" })
-        })
-        Logger.setLogLevel(.trace, for: Category.realm)
-        XCTAssertEqual(Logger.logLevel(for: Category.realm), .trace)
+        logs = ""
+        Logger.shared = Logger(level: .trace) { level, message in
+            logs += "\(Date.now) \(level.logLevel) \(message)"
+        }
+        XCTAssertEqual(Logger.shared.level, .trace)
         try autoreleasepool { _ = try Realm() }
-        XCTAssertTrue(!logs.value.isEmpty)
-        XCTAssertTrue(logs.value.contains("Details DB:"))
-        XCTAssertTrue(logs.value.contains("Trace DB:"))
-    }
-
-    // Core defines the different categories in runtime, forcing the SDK to define the categories again.
-    // This test validates that we have added new defined categories to the Categories enum and/or
-    // child categories
-    func testAllCategoriesWatchDog() throws {
-        for category in Logger.allCategories() {
-            XCTAssertNotNil(categoryfromString(category), "LogCategory `\(category)` not added to the Category enum.")
-            XCTAssertEqual(categoryfromString(category)?.rawValue, category)
-        }
-    }
-
-    func testLogLevelForCategories() throws {
-        Logger.setLogLevel(.off, for: Category.realm)
-        XCTAssertEqual(Logger.logLevel(for: Category.realm), .off)
-
-        for category in Logger.allCategories() {
-            let categoryEnum = categoryfromString(category)
-            XCTAssertNotNil(categoryEnum, "LogCategory `\(category)` not added to the Category enum.")
-
-            Logger.setLogLevel(.trace, for: categoryEnum!)
-            XCTAssertEqual(Logger.logLevel(for: categoryEnum!), .trace)
-            XCTAssertNotEqual(Logger.logLevel(for: categoryEnum!), .all)
-        }
-    }
-
-    func testLogMessageForCategory() throws {
-        let logs = Locked("")
-        let logger = Logger(function: { level, category, message in
-            logs.withLock({ $0 += "\(level.logLevel) \(category.rawValue) \(message) " })
-        })
-        Logger.shared = logger
-
-        for category in Logger.allCategories() {
-            logs.wrappedValue = ""
-            let categoryEnum = categoryfromString(category)
-            XCTAssertNotNil(categoryEnum, "LogCategory `\(category)` not added to the Category enum.")
-
-            Logger.setLogLevel(.trace, for: categoryEnum!)
-
-            XCTAssertEqual(Logger.logLevel(for: categoryEnum!), .trace)
-            logger.log(with: .trace, categoryName: category, message: "Test")
-            XCTAssertTrue(logs.value.contains("\(LogLevel.trace.logLevel) \(category) Test"), "Log doesn't contain \(category)")
-        }
-    }
-
-    /// This test works because `get_category_names()` returns categories from parent to children.
-    func testShouldNotLogParentOrRelatedCategory() throws {
-        Logger.setLogLevel(.off, for: Category.realm)
-        XCTAssertEqual(Logger.logLevel(for: Category.realm), .off)
-
-        let logs = Locked("")
-        let logger = Logger(function: { level, category, message in
-            logs.withLock({ $0 += "\(level.logLevel) \(category.rawValue) \(message) " })
-        })
-        Logger.shared = logger
-
-        let categories = Logger.allCategories()
-        for (index, category) in categories.enumerated() {
-            guard index <= categories.count-2 else { return }
-            logs.wrappedValue = ""
-            let categoryEnum = categoryfromString(categories[index+1])
-            XCTAssertNotNil(categoryEnum, "LogCategory `\(category)` not added to the Category enum.")
-
-            Logger.setLogLevel(.trace, for: categoryEnum!)
-            XCTAssertEqual(Logger.logLevel(for: categoryEnum!), .trace)
-
-            logger.log(with: .trace, categoryName: category, message: "Test")
-            XCTAssertFalse(logs.value.contains("\(LogLevel.trace.logLevel) \(category) Test"), "Log shouldn't contain message from \(category)")
-            Logger.setLogLevel(.off, for: categoryEnum!)
-        }
-    }
-
-    /// Logger should log messages from all child categories
-    func testShouldLogWhenParentCategory() throws {
-        let logs = Locked("")
-        let logger = Logger(function: { level, category, message in
-            logs.withLock({ $0 += "\(level.logLevel) \(category.rawValue) \(message) " })
-        })
-        Logger.shared = logger
-        Logger.setLogLevel(.trace, for: Category.realm)
-        XCTAssertEqual(Logger.logLevel(for: Category.realm), .trace)
-
-        for category in Logger.allCategories() {
-            logs.wrappedValue = ""
-            logger.log(with: .trace, categoryName: category, message: "Test")
-            XCTAssertTrue(logs.value.contains("\(LogLevel.trace.logLevel) \(category) Test"), "Log doesn't contain \( Category.realm.rawValue)")
-        }
-    }
-
-    func testChangeCategoryLevel() throws {
-        let logs = Locked("")
-        let logger = Logger(function: { level, category, message in
-            logs.withLock({ $0 += "\(level.logLevel) \(category.rawValue) \(message) " })
-        })
-        Logger.shared = logger
-
-        Logger.setLogLevel(.trace, for: Category.realm)
-        XCTAssertEqual(Logger.logLevel(for: Category.realm), .trace)
-
-        for category in Logger.allCategories() {
-            let categoryEnum = categoryfromString(category)
-            XCTAssertEqual(Logger.logLevel(for: categoryEnum!), .trace)
-        }
-
-        Logger.setLogLevel(.all, for: Category.realm)
-        XCTAssertEqual(Logger.logLevel(for: Category.realm), .all)
-
-        for category in Logger.allCategories() {
-            let categoryEnum = categoryfromString(category)
-            XCTAssertEqual(Logger.logLevel(for: categoryEnum!), .all)
-        }
-    }
-
-    func testChangeSubCategoryLevel() throws {
-        Logger.setLogLevel(.off, for: Category.realm)
-        XCTAssertEqual(Logger.logLevel(for: Category.Storage.all), .off)
-        XCTAssertEqual(Logger.logLevel(for: Category.Storage.transaction), .off)
-        XCTAssertEqual(Logger.logLevel(for: Category.Storage.query), .off)
-        XCTAssertEqual(Logger.logLevel(for: Category.Storage.object), .off)
-        XCTAssertEqual(Logger.logLevel(for: Category.Storage.notification), .off)
-
-        Logger.setLogLevel(.info, for: Category.Storage.all)
-        XCTAssertEqual(Logger.logLevel(for: Category.Storage.all), .info)
-        XCTAssertEqual(Logger.logLevel(for: Category.Storage.transaction), .info)
-        XCTAssertEqual(Logger.logLevel(for: Category.Storage.query), .info)
-        XCTAssertEqual(Logger.logLevel(for: Category.Storage.object), .info)
-        XCTAssertEqual(Logger.logLevel(for: Category.Storage.notification), .info)
-
-        XCTAssertEqual(Logger.logLevel(for: Category.realm), .off)
-        XCTAssertEqual(Logger.logLevel(for: Category.sdk), .off)
-        XCTAssertEqual(Logger.logLevel(for: Category.app), .off)
-        XCTAssertEqual(Logger.logLevel(for: Category.Sync.all), .off)
-    }
-
-    func testCallbackFilteringForCatgories() throws {
-        let logs = Locked("")
-        let logger = Logger(function: { level, _, message in
-            logs.withLock({ $0 += "\(Date.now) \(level.logLevel) \(message)" })
-        })
-
-        Logger.shared = logger
-
-        Logger.setLogLevel(.off, for: Category.realm)
-        Logger.setLogLevel(.info, for: Category.Storage.all)
-
-        logger.log(with: .info, categoryName: Category.Storage.all.rawValue, message: "Storage test entry")
-        XCTAssertTrue(logs.value.contains("Storage test entry"))
-        logs.wrappedValue = ""
-
-        logger.log(with: .info, categoryName: Category.Storage.transaction.rawValue, message: "Transaction test entry")
-        XCTAssertTrue(logs.value.contains("Transaction test entry"))
-        logs.wrappedValue = ""
-
-        logger.log(with: .info, categoryName: Category.realm.rawValue, message: "REALM test entry")
-        XCTAssertFalse(logs.value.contains("REALM test entry"))
-    }
-
-    func categoryfromString(_ string: String) -> LogCategory? {
-        if let category = Category(rawValue: string) {
-            return category
-        } else if let storage = Category.Storage(rawValue: string) {
-            return storage
-        } else if let sync = Category.Sync(rawValue: string) {
-            return sync
-        } else if let client = Category.Sync.Client(rawValue: string) {
-            return client
-        } else {
-            return nil
-        }
+        XCTAssertTrue(!logs.isEmpty)
+        XCTAssertTrue(logs.contains("Details DB:"))
+        XCTAssertTrue(logs.contains("Trace DB:"))
     }
 }

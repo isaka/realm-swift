@@ -1,37 +1,248 @@
 x.y.z Release notes (yyyy-MM-dd)
 =============================================================
 ### Enhancements
-* Added support for filtering logs by category. Users wil have more fine grained control over
-  the log level for each category as well.
-  ```swift
-  Logger.setLogLevel(.info, category: Category.Storage.transactions)
-  ```
-* Code sign our published xcframeworks. By Apple's requirements, we should sign our release
-  binaries so Xcode can validate it was signed by the same developer on every new version. 
-  ([Apple](https://developer.apple.com/support/third-party-SDK-requirements/)).
-* Report sync warnings from the server such as sync being disabled server-side to the sync error handler.
-  ([#8020](https://github.com/realm/realm-swift/issues/8020)).
+* None.
 
 ### Fixed
-* App change notifications were being sent too soon when a new user was logged
-  in, resulting in the user's profile being empty if it was read from within
-  the change notification (since v10.51.0).
+* <How to hit and notice issue? what was the impact?> ([#????](https://github.com/realm/realm-swift/issues/????), since v?.?.?)
+* None.
 
-### Deprecations
-* `RLMLogger.level`/`Logger.level` has been deprecated in favor of using
-  `RLMLogger.setLevel:forCategory:`/`Logger.setLevel(:category:)` and
-  `RLMLogger.getLevelForCategory:`/`Logger.getLevel(for:)`.
-* It is not recommended to initialize a `RLMLogger/Logger` with a level anymore.
+<!-- ### Breaking Changes - ONLY INCLUDE FOR NEW MAJOR version -->
+
+### Compatibility
+* Realm Studio: 15.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 16.3.0.
+* CocoaPods: 1.10 or later.
+* Xcode: 15.3.0-16.3.
+
+### Internal
+* Upgraded realm-core from ? to ?
+
+10.54.4 Release notes (2025-04-09)
+=============================================================
+
+### Enhancements
+
+* Add Xcode 16.3 binaries.
+
+### Compatibility
+
+* Realm Studio: 15.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 16.3.0.
+* CocoaPods: 1.10 or later.
+* Xcode: 15.3.0-16.3.
+
+10.54.3 Release notes (2025-03-07)
+=============================================================
+
+### Enhancements
+
+* Enable automatic client reset handling for Events Realms. These Realms
+  typically do not trigger client resets, but may if sync is restarted when one
+  is partially uploaded. ([Core #8072](https://github.com/realm/realm-core/pull/8072)).
+
+### Compatibility
+
+* Realm Studio: 15.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 16.2.0.
+* CocoaPods: 1.10 or later.
+* Xcode: 15.3.0-16.2.
+
+### Internal
+
+* Upgraded realm-core from v14.13.1 to 14.14.0
+
+10.54.2 Release notes (2024-12-17)
+=============================================================
+
+### Enhancements
+
+* Add prebuilt binaries for Xcode 16.2.
+
+### Compatibility
+
+* Realm Studio: 15.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 16.2.0.
+* CocoaPods: 1.10 or later.
+* Xcode: 15.3.0-16.2.
+
+10.54.1 Release notes (2024-10-22)
+=============================================================
+
+### Fixed
+
+* The events library would attempt to upload backup files created as part of
+  file format upgrades, causing backup copies of those backups to be made,
+  looping until the maximum file name size was reached
+  ([Core #8040](https://github.com/realm/realm-core/issues/8040), since v10.26.0).
+
+### Compatibility
+
+* Realm Studio: 15.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 15.4.0.
+* CocoaPods: 1.10 or later.
+* Xcode: 15.3.0-16.1 beta.
+
+### Internal
+
+* Upgraded realm-core from v14.13.0 to 14.13.1
+
+10.54.0 Release notes (2024-09-20)
+=============================================================
+
+The minimum supported version of Xcode is now 15.3.
+
+### Enhancements
+* Build in Swift 6 language mode when using Xcode 16. Libraries build in Swift
+  6 mode can be consumed by apps built in Swift 5 mode, so this should not have
+  any immediate effects beyond eliminating some warnings and ensuring that all
+  Realm APIs can be used in Swift 6 mode. Some notes about using Realm Swift in
+  Swift 6:
+  - `try await Realm(actor: actor)` has been replaced with `try await
+  Realm.open()` to work around isolated parameters not being implemented for
+  initializers (https://github.com/swiftlang/swift/issues/71174). The actor is
+  now automatically inferred and should not be manually passed in.
+  - `@ThreadSafe` is not usable as a property wrapper on local variables and
+  function arguments in Swift 6 mode. Sendability checking for property
+  wrappers never got implemented due to them being quietly deprecated in favor
+  of macros. It can still be used as a property wrapper for class properties
+  and as a manual wrapper locally, but note that it does not combine well with
+  actor-isolated Realms.
+  - In Swift 6 mode a few mongo client functions have changed from returning
+  `[AnyHashable: Any]` to `Document`. These should have been `Document` all
+  along, and the old return type no longer compiles due to not being Sendable.
+* Some SwiftUI components are now explicitly marked as `@MainActor`. These
+  types were implicitly `@MainActor` in Swift 5, but became nonisolated when
+  using Xcode 16 in Swift 5 mode due to the removal of implicit isolation when
+  using property wrappers on member variables. This resulted in some new
+  sendability warnings in Xcode 16 (or errors in Swift 6 mode).
+* Add Xcode 16 and 16.1 binaries to the release packages.
+
+### Fixed
+* Having a query with a number of predicates ORed together may result in a
+  crash on some platforms (strict weak ordering check failing on iphone)
+  ([#8028](https://github.com/realm/realm-core/issues/8028), since v10.50.0)
 
 ### Compatibility
 * Realm Studio: 15.0.0 or later.
 * APIs are backwards compatible with all previous releases in the 10.x.y series.
 * Carthage release for Swift is built with Xcode 15.4.0.
 * CocoaPods: 1.10 or later.
-* Xcode: 15.1.0-16 beta 4.
+* Xcode: 15.3.0-16.1 beta.
 
 ### Internal
-* Upgraded realm-core from v14.11.0 to 14.11.1
+* Upgraded realm-core from v14.12.1 to 14.13.0
+
+10.53.1 Release notes (2024-09-05)
+=============================================================
+
+### Enhancements
+
+* Add the file path to the exception thrown by File::rw_lock() when it fails to
+  open the file. ([Core #7999](https://github.com/realm/realm-core/issues/7999))
+
+### Fixed
+
+* Filtering notifications with a LinkingObjects property as the final element
+  could sometimes give wrong results
+  ([Core #7530](https://github.com/realm/realm-core/issues/7530), since v10.11.0)
+* Fix a potential crash during process termination when Logger log level is set
+  higher than Info. ([Core #7969](https://github.com/realm/realm-core/issues/7969), since v10.45.0)
+* The check for maximum path length was incorrect and lengths between 240 and
+  250 would fail to use the hashed fallback ([Core #8007](https://github.com/realm/realm-core/issues/8007), since v10.0.0).
+* API misuse resulting in an exception being thrown from within a callback
+  would sometimes terminate due to hitting `REALM_UNREACHABLE()` rather than
+  the exception being propagated to the caller
+  ([Core #7836](https://github.com/realm/realm-core/issues/7836)).
+
+### Compatibility
+
+* Realm Studio: 15.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 15.4.0.
+* CocoaPods: 1.10 or later.
+* Xcode: 15.1.0-16 beta 5.
+
+### Internal
+
+* Upgraded realm-core from v14.12.0 to 14.12.1
+
+10.53.0 Release notes (2024-08-20)
+=============================================================
+
+### Enhancements
+
+* Code sign our published xcframeworks. By Apple's requirements, we should sign our release
+  binaries so Xcode can validate it was signed by the same developer on every new version.
+  ([Apple](https://developer.apple.com/support/third-party-SDK-requirements/)).
+* Report sync warnings from the server such as sync being disabled server-side to the sync error handler.
+  ([#8020](https://github.com/realm/realm-swift/issues/8020)).
+* Add support for string comparison queries, which allows building string
+  queries with the following operators (`>`, `>=`, `<`, `<=`).
+  This is a case sensitive lexicographical comparison.
+  ([#8008](https://github.com/realm/realm-swift/issues/8008)).
+
+### Fixed
+
+* `-[RLMAsymmetricObject createObject:withValue:]` was marked as having a
+  non-null return value despite always returning `nil` (since v10.29.0).
+* Eliminate several clang static analyzer warnings which did not report actual
+  bugs.
+* The async and Future versions of `User.functions` only worked for functions
+  which took exactly one argument, which had to be an array ([#8669](https://github.com/realm/realm-swift/issues/8669), since 10.16.0).
+
+### Compatibility
+
+* Realm Studio: 15.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 15.4.0.
+* CocoaPods: 1.10 or later.
+* Xcode: 15.1.0-16 beta 5.
+
+10.52.3 Release notes (2024-08-09)
+=============================================================
+
+### Enhancements
+
+* Improve performance of bulk object creation when the objects have embedded
+  objects. This is particularly significant for applying sync bootstraps.
+  ([Core #7945](https://github.com/realm/realm-core/issues/7945))
+* Client reset cycle detection now checks if the previous recovery attempt was
+  made by the same version of Realm, and if not attempts recovery again
+  ([Core #7944](https://github.com/realm/realm-core/pull/7944)).
+
+### Fixed
+
+* App change notifications were being sent too soon when a new user was logged
+  in, resulting in the user's profile being empty if it was read from within
+  the change notification (since v10.51.0).
+* A conflict resolution bug related to ArrayErase and Clear instructions could
+  sometimes cause an "Invalid prior_size" exception when synchronizing
+  ([Core #7893](https://github.com/realm/realm-core/issues/7893), since v10.51.0).
+* Sync merges which resulted in a changeset's reciprotal transformation being
+  empty were handled incorrectly, possibly resulting in data divergence. No
+  instances of this actually happening have been reported.
+  ([Core #7955](https://github.com/realm/realm-core/pull/7955), since v10.51.0)
+* `Realm.writeCopy()` would sometimes incorrectly throw an exception claiming
+  that there were unuploaded local changes when the source Realm is a
+  synchronized Realm ([Core #7966](https://github.com/realm/realm-core/issues/7966), since v10.7.6).
+
+### Compatibility
+
+* Realm Studio: 15.0.0 or later.
+* APIs are backwards compatible with all previous releases in the 10.x.y series.
+* Carthage release for Swift is built with Xcode 15.4.0.
+* CocoaPods: 1.10 or later.
+* Xcode: 15.1.0-16 beta 5.
+
+### Internal
+
+* Upgraded realm-core from v14.11.1 to 14.12.0
 
 10.52.2 Release notes (2024-07-19)
 =============================================================
@@ -80,6 +291,7 @@ x.y.z Release notes (yyyy-MM-dd)
   ([Core #2129](https://jira.mongodb.org/browse/RCORE-2129), since v10.51.0).
 
 ### Compatibility
+
 * Realm Studio: 15.0.0 or later.
 * APIs are backwards compatible with all previous releases in the 10.x.y series.
 * Carthage release for Swift is built with Xcode 15.4.0.

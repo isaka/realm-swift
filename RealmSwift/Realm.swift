@@ -1270,6 +1270,38 @@ extension Realm {
         self = Realm(rlmRealm.wrappedValue)
     }
 
+#if compiler(>=6)
+    /**
+     Asynchronously obtains a `Realm` instance isolated to the current Actor.
+
+     Opening a Realm with an actor isolates the Realm to that actor. Rather
+     than being confined to the specific thread which the Realm was opened on,
+     the Realm can instead only be used from within that actor or functions
+     isolated to that actor. Isolating a Realm to an actor also enables using
+     ``asyncWrite`` and ``asyncRefresh``.
+
+     All initialization work to prepare the Realm for work, such as creating,
+     migrating, or compacting the file on disk, and waiting for synchronized
+     Realms to download the latest data from the server is done on a background
+     thread and does not block the calling executor.
+
+     - parameter configuration: A configuration object to use when opening the Realm.
+     - parameter downloadBeforeOpen: When opening the Realm should first download
+     all data from the server.
+     - throws: An `NSError` if the Realm could not be initialized.
+               `CancellationError` if the task is cancelled.
+     - returns: An open Realm.
+     */
+    public static func open(configuration: Realm.Configuration = .defaultConfiguration,
+                            _isolation actor: isolated any Actor = #isolation,
+                            downloadBeforeOpen: OpenBehavior = .never) async throws -> Realm {
+        let scheduler = RLMScheduler.actor(actor, invoke: actor.invoke, verify: actor.verifier())
+        let rlmRealm = try await openRealm(configuration: configuration, scheduler: scheduler,
+                                            actor: actor, downloadBeforeOpen: downloadBeforeOpen)
+        return Realm(rlmRealm.wrappedValue)
+    }
+#endif
+
 #if compiler(<6)
     /**
      Performs actions contained within the given block inside a write transaction.
@@ -1372,7 +1404,7 @@ extension Realm {
     @discardableResult
     @_unsafeInheritExecutor
     public func asyncRefresh() async -> Bool {
-        guard rlmRealm.actor as? Actor != nil else {
+        guard rlmRealm.actor is Actor else {
             fatalError("asyncRefresh() can only be called on main thread or actor-isolated Realms")
         }
         guard let task = RLMRealmRefreshAsync(rlmRealm) else {
@@ -1458,7 +1490,9 @@ extension Realm {
 
         if realm.inWriteTransaction {
             let error = await withCheckedContinuation { continuation in
-                realm.commitAsyncWrite(withGrouping: false, completion: continuation.resume)
+                realm.commitAsyncWrite(withGrouping: false) { error in
+                    continuation.resume(returning: error)
+                }
             }
             if let error {
                 throw error
@@ -1629,5 +1663,45 @@ extension Projection: RealmFetchable {
     /// :nodoc:
     public static func className() -> String {
         return Root.className()
+    }
+}
+
+/**
+ `Logger` is used for creating your own custom logging logic.
+
+ You can define your own logger creating an instance of `Logger` and define the log function which will be
+ invoked whenever there is a log message.
+
+ ```swift
+ let logger = Logger(level: .all) { level, message in
+    print("Realm Log - \(level): \(message)")
+ }
+ ```
+
+ Set this custom logger as you default logger using `Logger.shared`.
+
+ ```swift
+    Logger.shared = inMemoryLogger
+ ```
+
+ - note: By default default log threshold level is `.info`, and logging strings are output to Apple System Logger.
+*/
+public typealias Logger = RLMLogger
+extension Logger {
+    /**
+     Log a message to the supplied level.
+
+     ```swift
+     let logger = Logger(level: .info, logFunction: { level, message in
+         print("Realm Log - \(level): \(message)")
+     })
+     logger.log(level: .info, message: "Info DB: Database opened succesfully")
+     ```
+
+     - parameter level: The log level for the message.
+     - parameter message: The message to log.
+     */
+    internal func log(level: LogLevel, message: String) {
+        self.logLevel(level, message: message)
     }
 }
